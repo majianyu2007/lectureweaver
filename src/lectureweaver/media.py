@@ -137,12 +137,22 @@ class RangeProxy:
 
 
 # ---------------------------------------------------------------- ffmpeg helpers
+def ffmpeg_install_hint() -> str:
+    import sys
+
+    if sys.platform == "darwin":
+        return "brew install ffmpeg"
+    if sys.platform == "win32":
+        return "winget install Gyan.FFmpeg（或用 lw init --ffmpeg 指定路径）"
+    return "sudo apt install ffmpeg（或发行版对应的包；也可用 lw init --ffmpeg 指定路径）"
+
+
 def ffmpeg_bin() -> str:
     from .config import MachineConfig
 
     b = MachineConfig.load().ffmpeg_bin
     if not shutil.which(b):
-        raise MediaError("未找到 ffmpeg，请先 brew install ffmpeg")
+        raise MediaError(f"未找到 ffmpeg：{ffmpeg_install_hint()}")
     return b
 
 
@@ -151,7 +161,7 @@ def ffprobe_bin() -> str:
 
     b = MachineConfig.load().ffprobe_bin
     if not shutil.which(b):
-        raise MediaError("未找到 ffprobe，请先 brew install ffmpeg")
+        raise MediaError(f"未找到 ffprobe：{ffmpeg_install_hint()}")
     return b
 
 

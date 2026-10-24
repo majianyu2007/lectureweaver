@@ -1192,7 +1192,9 @@ def cmd_doctor(args):
 
     import sys as _sys
 
-    ff_fix = {"darwin": "brew install ffmpeg", "win32": "winget install Gyan.FFmpeg"}.get(_sys.platform, "sudo apt install ffmpeg（或发行版对应的包）")
+    from .media import ffmpeg_install_hint
+
+    ff_fix = ffmpeg_install_hint()
     add("ffmpeg", bool(sh.which(cfg.ffmpeg_bin)), sh.which(cfg.ffmpeg_bin) or "未安装", ff_fix)
     ok, info = whisper_available()
     add("本地语音识别（可选）", ok, info, "安装 whisper.cpp（README 中有各系统的方法），模型放到 ~/.cache/whisper/ggml-large-v3-turbo-q5_0.bin")
