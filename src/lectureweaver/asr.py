@@ -16,6 +16,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -62,7 +63,8 @@ def vad_model() -> Path | None:
 def whisper_available() -> tuple[bool, str]:
     cfg = MachineConfig.load()
     if not shutil.which(cfg.whisper_bin):
-        return False, "未找到 whisper-cli（brew install whisper-cpp）"
+        hint = "brew install whisper-cpp" if sys.platform == "darwin" else "从 github.com/ggml-org/whisper.cpp 安装，或用 lw init --whisper-bin 指定路径"
+        return False, f"未找到 whisper-cli（{hint}）"
     m = default_model()
     if not m:
         return False, "未找到 whisper 模型（建议下载 ggml-large-v3-turbo-q5_0.bin 到 ~/.cache/whisper/）"
