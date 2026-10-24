@@ -23,7 +23,7 @@ def test_roundtrip_keeps_everything(kb, isolated_env):
     lid, note = populate(kb)
     # a hand edit made in the vault must be captured by the backup
     p = N.notes_root() / kb.q1("SELECT vault_path FROM notes")["vault_path"]
-    p.write_text(p.read_text("utf-8") + "\n我的补充\n")
+    p.write_text(p.read_text("utf-8") + "\n我的补充\n", encoding="utf-8")
     res = B.create(kb, isolated_env / "bk")
     v = B.verify_archive(res["path"])
     assert v["ok"], v["problems"]

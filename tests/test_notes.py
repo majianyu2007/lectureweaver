@@ -58,7 +58,7 @@ def test_user_edits_are_never_silently_overwritten(kb, lec):
     note = N.get_or_create(kb, "lecture", lec)
     N.save(kb, note, DRAFT, {})
     p = vault_file(kb, note["id"])
-    p.write_text(p.read_text("utf-8").replace("代码见截图：", "代码见截图：\n\n我的理解：桶装满才倒出来。"))
+    p.write_text(p.read_text("utf-8").replace("代码见截图：", "代码见截图：\n\n我的理解：桶装满才倒出来。"), encoding="utf-8")
     out = N.save(kb, note, DRAFT.replace("文件拷贝", "文件拷贝（复习版）"), {"style": "复习版"})
     assert not out.exported and out.proposal_path
     assert "我的理解：桶装满才倒出来。" in p.read_text("utf-8")
@@ -74,7 +74,7 @@ def test_new_version_that_keeps_user_text_is_applied(kb, lec):
     note = N.get_or_create(kb, "lecture", lec)
     N.save(kb, note, DRAFT, {})
     p = vault_file(kb, note["id"])
-    p.write_text(p.read_text("utf-8").replace("代码见截图：", "代码见截图：\n\n我的理解：桶装满才倒出来。"))
+    p.write_text(p.read_text("utf-8").replace("代码见截图：", "代码见截图：\n\n我的理解：桶装满才倒出来。"), encoding="utf-8")
     keep = DRAFT.replace("代码见截图：", "代码见截图：\n\n我的理解：桶装满才倒出来。").replace("# 文件拷贝", "# 文件拷贝（复习版）")
     out = N.save(kb, note, keep, {})
     assert out.exported
@@ -85,7 +85,7 @@ def test_deleted_content_does_not_come_back_silently(kb, lec):
     note = N.get_or_create(kb, "lecture", lec)
     N.save(kb, note, DRAFT, {})
     p = vault_file(kb, note["id"])
-    p.write_text(p.read_text("utf-8").replace("> 最后一桶可能不满。\n", ""))
+    p.write_text(p.read_text("utf-8").replace("> 最后一桶可能不满。\n", ""), encoding="utf-8")
     out = N.save(kb, note, DRAFT + "\n补充一句。\n", {})
     assert not out.exported
     assert "最后一桶可能不满" not in p.read_text("utf-8")
@@ -95,7 +95,7 @@ def test_merge_keeps_both(kb, lec):
     note = N.get_or_create(kb, "lecture", lec)
     N.save(kb, note, DRAFT + "\n## 结尾\n\n结束。\n", {})
     p = vault_file(kb, note["id"])
-    p.write_text(p.read_text("utf-8").replace("代码见截图：", "代码见截图：\n\n我的理解：桶。"))
+    p.write_text(p.read_text("utf-8").replace("代码见截图：", "代码见截图：\n\n我的理解：桶。"), encoding="utf-8")
     out = N.save(kb, note, (DRAFT + "\n## 结尾\n\n结束。\n").replace("结束。", "结束，下次讲字符流。"), {}, mode="merge")
     assert out.exported, out.message
     t = p.read_text("utf-8")
