@@ -1190,7 +1190,6 @@ def cmd_doctor(args):
     def add(name, ok, detail, fix=""):
         checks.append({"name": name, "ok": ok, "detail": detail, "fix": fix})
 
-    import sys as _sys
 
     from .media import ffmpeg_install_hint
 
