@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lectureweaver"
+version = "0.1.0"
+description = "个人课堂知识与学习助手：西农云课堂实录 + 课表 + 课程资料 → 可追溯笔记与持续学习状态"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "majianyu2007" }]
+keywords = ["nwafu", "lecture", "notes", "obsidian", "whisper", "ocr", "claude-code", "codex", "skill", "learning"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Education",
+    "License :: OSI Approved :: MIT License",
+    "Natural Language :: Chinese (Simplified)",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Education",
+]
+dependencies = [
+    "httpx>=0.27",
+    "pycryptodome>=3.20",
+    "pyotp>=2.9",
+    "Pillow>=10.3",
+    "pypdf>=4.2",
+    "python-docx>=1.1",
+    "python-pptx>=0.6.23",
+    "keyring>=25.0",
+]
+
+[project.optional-dependencies]
+# Local OCR on Linux/Windows (macOS uses Apple Vision and needs nothing extra)
+ocr = ["rapidocr>=2.0", "onnxruntime>=1.17", "numpy>=1.24", "pypdfium2>=4.20"]
+dev = ["pytest>=8.0"]
+
+[project.urls]
+Homepage = "https://github.com/majianyu2007/lectureweaver"
+Issues = "https://github.com/majianyu2007/lectureweaver/issues"
+
+[project.scripts]
+lw = "lectureweaver.cli:main"
+lectureweaver = "lectureweaver.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lectureweaver"]
+artifacts = ["src/lectureweaver/native/*.swift"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

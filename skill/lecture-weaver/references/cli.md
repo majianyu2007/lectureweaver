@@ -1,0 +1,200 @@
+# 命令参考（自动生成：python scripts/gen_cli_doc.py）
+
+所有命令支持 `--json`。
+
+- **`lw auth login`** — 登录统一身份认证并建立云课堂会话（密码只存入系统凭据库）
+  - `--username/-u` 学号
+  - `--gui` 用系统对话框输入密码/验证码（AI 代为启动时使用；macOS/Windows/Linux 桌面均可）
+  - `--no-save-password` 不保存密码（之后会话过期需重新登录）
+- **`lw auth status`** — 查看会话状态（不显示任何凭据）
+- **`lw auth logout`** — 退出登录并清除会话 Cookie
+  - `--forget-password` 同时删除保存的密码
+- **`lw dev probe`** — 抓取云课堂接口样本到本地目录（去除令牌）
+  - `--out` 
+  - `--courses` 最多探测几门课
+- **`lw init`** — 初始化/修改知识库位置与笔记输出目录
+  - `--kb` 知识库目录（默认 ~/LectureWeaver）
+  - `--notes` 笔记输出目录（Obsidian Vault 内的文件夹或任意 Markdown 目录）
+  - `--ffmpeg` ffmpeg 可执行文件路径（不在 PATH 里时）
+  - `--whisper-bin` whisper.cpp 的 whisper-cli 路径（不在 PATH 里时）
+  - `--whisper-model` whisper 模型文件（默认在 ~/.cache/whisper/ 下查找）
+- **`lw sync`** — 同步课表与课堂实录元数据（不下载视频）
+  - `--term` 学期，如 2025-2026-2（默认当前学期）
+  - `--no-timetable` 不访问教务课表
+- **`lw courses`** — 列出课程
+  - `--term` 
+- **`lw lectures`** — 列出课时（可筛选）及其处理状态
+  - `--course/-c` 课程名/别名/课程号（模糊匹配）
+  - `--week/-w` 教学周，如 7 或 5-7
+  - `--date/-d` 日期，如 2026-10-19 或 10-19
+  - `--since` 起始日期（含）
+  - `--until` 结束日期（含）
+  - `--lecture/-l` 课时 ID（可多次）
+  - `--unprocessed` 只选尚未整理完成的课时
+  - `--status` 按匹配状态筛选：matched/unscheduled/ambiguous/incomplete/manual
+  - `--term` 学期，如 2026-2027-1（默认最新）
+  - `--limit` 
+- **`lw process`** — 整理选定课时：转写、截图、OCR、学习包（可中断续跑，已完成的不重复）
+  - `--course/-c` 课程名/别名/课程号（模糊匹配）
+  - `--week/-w` 教学周，如 7 或 5-7
+  - `--date/-d` 日期，如 2026-10-19 或 10-19
+  - `--since` 起始日期（含）
+  - `--until` 结束日期（含）
+  - `--lecture/-l` 课时 ID（可多次）
+  - `--unprocessed` 只选尚未整理完成的课时
+  - `--status` 按匹配状态筛选：matched/unscheduled/ambiguous/incomplete/manual
+  - `--term` 学期，如 2026-2027-1（默认最新）
+  - `--limit` 
+  - `--force` 强制重做某阶段（details/transcript/visual/packet/all）
+  - `--stages` 只跑这些阶段，逗号分隔
+  - `--asr` 无平台转写时：auto/local（本地 whisper）、none（不识别）、或已授权的云服务名
+  - `--dry-run` 只列出将处理的课时
+- **`lw lecture show`** — 查看课时详情、处理进度和素材
+  - `<lecture>` 
+- **`lw lecture packet`** — 输出学习包路径（供 AI 整理笔记/讲解；首次使用需授权）
+  - `<lecture>` 
+  - `--print` 直接打印学习包内容
+- **`lw lecture assign`** — 把一条录像手动归入某课时（处理匹配歧义）
+  - `<recording>` 录像 ID（lw lecture show 可见）
+  - `<lecture>` 
+- **`lw lecture frame`** — 查看某张截图的完整 OCR 与图片路径
+  - `<lecture>` 
+  - `<frame_id>` 
+- **`lw lecture confirm`** — 确认课时与课表的对应关系（标记为 manual，之后同步不再改动）
+  - `<lecture>` 
+  - `--note` 
+  - `--title` 为课时设置主题标题
+- **`lw status`** — 总体进度：已完成/不完整/需要补充的课时
+  - `--course/-c` 
+  - `--term` 
+- **`lw clean`** — 清理残留的临时媒体文件
+- **`lw note save`** — 校验并保存 AI 写好的笔记草稿，自动写入笔记目录（不覆盖你的手动修改）
+  - `--file/-f` 草稿 Markdown 文件（含 {t}/{f}/{m} 标记）
+  - `--lecture/-l` 课时 ID（课时笔记）
+  - `--kind` 
+  - `--course/-c` 非课时笔记所属课程
+  - `--key` 非课时笔记的标识（如 第7周复习）
+  - `--title` 标题（默认取草稿第一个一级标题）
+  - `--model` 生成笔记的模型/工具，例如 claude-opus-5-5@claude-code
+  - `--style` 笔记风格说明，例如 复习版/详细版
+  - `--merge` 你改过笔记时尝试三方合并
+  - `--replace` 明确覆盖你的修改（旧内容保留在历史中）
+  - `--allow-drop` 明确允许新版本不包含你补充的内容
+  - `--check` 只校验不保存
+- **`lw note list`** — 列出笔记
+  - `--course/-c` 
+- **`lw note show`** — 显示笔记当前内容（含你在笔记软件中的修改）
+  - `<note>` 笔记 ID 或课时 ID
+- **`lw note history`** — 版本历史
+  - `<note>` 
+- **`lw note diff`** — 比较两个版本（默认最新两版）
+  - `<note>` 
+  - `--a` 
+  - `--b` 
+- **`lw note rollback`** — 回滚到某个版本（生成新版本，不删除历史）
+  - `<note>` 
+  - `--to` 
+- **`lw note accept`** — 采用最新 AI 版本替换你修改过的笔记（你的版本保留在历史中）
+  - `<note>` 
+- **`lw note sync`** — 扫描笔记目录，记录你在笔记软件中做的修改
+- **`lw note export`** — 把所有笔记重新写到当前笔记目录（换电脑/换目录后使用）
+- **`lw material add`** — 导入资料（PDF/PPTX/DOCX/Markdown/代码…）并关联课程
+  - `<files>` 
+  - `--course/-c` 关联到课程
+  - `--lecture/-l` 关联到课时（可多次）
+  - `--role` textbook/lab_guide/slides/code/reference/homework/exam/notes
+  - `--title` 
+  - `--note` 
+- **`lw material link`** — 把资料关联到课程/课时
+  - `<material>` 
+  - `--course/-c` 
+  - `--lecture/-l` 
+  - `--role` 
+  - `--note` 
+  - `--unlink` 
+- **`lw material suggest`** — 根据内容推荐可能对应的课时（需确认后再 link）
+  - `<material>` 
+  - `--course/-c` 
+- **`lw material list`** — 列出资料
+  - `--course/-c` 
+- **`lw material show`** — 显示资料提取的文字
+  - `<material>` 
+  - `--units` 页/幻灯片范围，如 1-3,7
+- **`lw search`** — 检索概念/例题/老师的讲解出自哪节课（转写、截图文字、资料、笔记）
+  - `<query>` 
+  - `--course/-c` 
+  - `--kind` 
+  - `--limit` 
+- **`lw frame`** — 查看某张截图的完整 OCR 与图片路径
+  - `<lecture>` 
+  - `<frame_id>` 
+- **`lw learn concept`** — 登记/更新知识点，并可关联到课时
+  - `<name>` 
+  - `--course/-c` 
+  - `--summary` 
+  - `--alias` 
+  - `--lecture/-l` 出处课时
+  - `--at` 出处时间 HH:MM:SS
+- **`lw learn log`** — 记录一条学习证据（讲解/作答/自述/复习）
+  - `<name>` 知识点名称
+  - `--course/-c` 
+  - `--kind` 
+  - `--outcome` 
+  - `--evidence` 学习者实际的回答/表述（简要原话）
+  - `--question` 所提的问题
+  - `--type` 题型：recall/apply/transfer/review
+  - `--misconception` 暴露出的具体误解
+  - `--session` 
+  - `--harness` 当前 AI 工具名，如 claude-code / codex
+- **`lw learn status`** — 知识点掌握情况（带依据）
+  - `--course/-c` 
+  - `<name>` 
+- **`lw learn next`** — 建议接下来学/复查什么
+  - `--course/-c` 
+- **`lw learn set`** — 手动修正掌握状态（需说明理由；之后的新证据会重新判断）
+  - `<name>` 
+  - `<state>` 
+  - `--course/-c` 
+  - `--reason` 
+- **`lw learn resolve`** — 标记某条误解已纠正
+  - `<misconception_id>` 
+  - `--evidence` 
+- **`lw learn session`** — 开始/结束一次学习会话（记录在哪个 AI 工具中学习）
+  - `<action>` 
+  - `--course/-c` 
+  - `--focus` 
+  - `--harness` 
+  - `--summary` 
+- **`lw consent status`** — 查看已授权的服务与范围
+- **`lw consent grant`** — 授权服务在指定范围内使用资料（用户确认后再运行）
+  - `<service>` harness / asr:<名称> / llm:<名称>
+  - `--scopes` 逗号分隔：transcripts,screenshots,materials,notes,learning,audio
+  - `--note` 
+- **`lw consent revoke`** — 撤销授权
+  - `<service>` 
+- **`lw provider add`** — 添加 OpenAI 兼容的语音识别服务（不会自动开通或付费）
+  - `<name>` 
+  - `--base-url` 
+  - `--model` 
+  - `--monthly-budget-minutes` 每 30 天最多识别多少分钟（防止意外大额费用）
+- **`lw provider set-key`** — 把 API Key 存入系统凭据库（从终端/对话框输入，不进入笔记或日志）
+  - `<name>` 
+  - `--gui` 
+- **`lw provider list`** — 列出服务（不显示密钥）
+- **`lw backup create`** — 创建备份（会先记录你在笔记目录中的修改）
+  - `--out/-o` 备份文件或目录（默认桌面）
+- **`lw backup verify`** — 校验备份文件
+  - `<archive>` 
+- **`lw backup restore`** — 从备份恢复（先完整校验；原有知识库改名保留）
+  - `<archive>` 
+  - `--kb` 恢复到的知识库目录（默认当前配置）
+  - `--force` 
+- **`lw check`** — 检查当前知识库的完整性与对应关系
+- **`lw course set`** — 设置课程别名/类型/笔记偏好
+  - `<course>` 
+  - `--alias` 别名（如 数据库、DB）
+  - `--subject` 
+  - `--note-prefs` 对这门课笔记的偏好（自然语言，会写进学习包）
+- **`lw doctor`** — 检查运行环境、登录、知识库、笔记目录与授权（AI 每次开始工作前先运行）
+- **`lw skill install`** — 把 Skill 安装到 ~/.claude/skills 与 ~/.codex/skills（优先链接，Windows 无权限时复制）
+  - `--target` 默认两者都装

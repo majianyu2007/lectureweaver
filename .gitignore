@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+# local scratch / never commit personal data
+.lw-scratch/
+.DS_Store
+*.lw-tmp
+.process.lock
