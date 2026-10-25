@@ -36,6 +36,9 @@ MARKUP = """\
 - `{m <资料ID> p.3}` 引用资料及页码/幻灯片号
 - 课堂内容写在正文；资料内容放 `> [!quote] 资料：…`；AI 补充解释/类比/例题放 `> [!tip] AI 补充`
 - 转写有同音错字：可按上下文纠正明显错误；不确定的写“（转写不清）”，不要编造老师的话
+- 读者可能不看录像：课上讲的每段内容（例题完整解法、逐步演示、幻灯片和代码、易错点、作业）都要写进笔记
+- 写给人复习用：直接写知识本身（定义、结论、步骤、代码、例题），不要写“老师用……说明……”式的转述，
+  不要在正文里交代出处或声明“没有编造/以截图为准”；时间点每段最多一个。详见 skill 的 references/note-guide.md
 """
 
 
@@ -72,7 +75,7 @@ def build_packet(kb: KB, lec) -> tuple[Path, dict]:
         L.append(f"- 用户对本课程笔记的偏好：{profile['note_prefs']}")
     # data quality
     L.append("")
-    L.append("## 素材情况（如实写进笔记的“资料说明”）")
+    L.append("## 素材情况（用来判断哪些内容可靠；“来源”一节由 lw note save 自动生成，笔记里不用复述）")
     for i, r in enumerate(recs, 1):
         det = loads(r["detail"], {}) or {}
         src = next((s for s in tr.get("sources", []) if s.get("rec") == r["id"]), {})

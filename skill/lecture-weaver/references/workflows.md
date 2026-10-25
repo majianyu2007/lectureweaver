@@ -1,27 +1,38 @@
 # 工作流程详解
 
-所有命令可加 `--json`。课程名可模糊匹配（“java”“数据库”），课时 ID 形如 `2026-10-20_2094300_p3-4`。
+所有命令可加 `--json`。课程名可模糊匹配（“java”“数据库”），课时 ID 形如 `2026-10-20_1234567_p3-4`（日期_课程号_节次）。
 
 ## A. 整理某周/某天/某门课（含“重点看演示的代码”）
 
 1. `lw sync`（只同步元数据，几秒钟）。
 2. `lw lectures -c java -w 7` 列出将处理的课时；有 ⚠ 的看说明，必要时问用户。
-3. `lw process -c java -w 7`。每个课时依次：details → transcript → visual → packet。输出里会报告传输量；失败的阶段重跑即可续上。
+3. `lw process -c java -w 7`。每个课时依次：details → transcript → visual → packet；默认同时处理 3 个课时。输出里会报告传输量；失败的阶段重跑即可续上（网络中断属于这种情况）。课时多时放到后台运行，同时用 `lw lectures --ready` 找已经可以写笔记的课时。
 4. 对每个课时：
    - `lw lecture packet <ID>` 得到学习包路径并阅读（大的学习包可分段读：先“素材情况”和“时间线”，再按需看“截图文字”）。
    - 用户强调代码/板书/某部分时，打开相应截图图片（学习包给出目录）核对。
-   - 写草稿到临时文件（如 `/tmp/lw-<ID>.md`），先 `lw note save -l <ID> -f 草稿 --check` 校验，再正式保存：
+   - 按 note-guide.md 写草稿到临时文件（如 `/tmp/lw-<ID>.md`），先 `lw note save -l <ID> -f 草稿 --check` 校验，按“写作提醒”修改，再正式保存：
      `lw note save -l <ID> -f 草稿 --model <模型@工具> --style <风格>`
    - 同时登记本课的主要知识点：`lw learn concept "<名称>" -l <ID> --at HH:MM:SS --summary "<一句话>"`（让以后能检索、能教学、能跨课联系）。
 5. 汇报：笔记路径、素材缺口（无转写/匹配歧义/录像缺段）、传输量。
 
 ## B. 补齐未整理的课
 
-`lw status -c 数据库` → `lw process -c 数据库 --unprocessed` → 对“已整理素材，尚未生成笔记”的课时执行 A.4。已有笔记的不要重写，除非用户要求。
+`lw status -c 数据库` → `lw process -c 数据库 --unprocessed`（后台）→ 对 `lw lectures -c 数据库 --ready` 列出的课时执行 A.4。已有笔记的不要重写，除非用户要求。
+
+## B2. 全部课程一次整理（几十个课时）
+
+1. 先估时并告诉用户：`lw lectures --unprocessed` 看数量；有平台转写的约 1 分钟/个，需要本地语音识别的约 5–10 分钟/个。
+2. 后台只启动一个处理命令：`lw process --unprocessed`（全部课程；默认 3 个并行，本地语音识别排队）。
+3. 写笔记与处理同时进行：循环 `lw lectures --ready` → 对列出的课时执行 A.4。并行写作的子代理只分配 `--ready` 里的课时，不要让它们各自运行 `lw process`。
+4. 最后 `lw status` 核对：每个课时都有笔记；“不完整/失败”的课时重跑 `lw process -l <ID>`，仍不行就把原因告诉用户。
+
+## B3. 按新写法重写已有笔记
+
+用户觉得笔记不好读、想换写法时：对每个课时 `lw note show <ID>`（含用户修改）+ `lw lecture packet <ID>` → 按 note-guide.md 重写 → `lw note save -l <ID> -f 草稿 --style <风格>`。旧版本都在历史里，可 `lw note rollback`。用户在 Obsidian 改过的笔记不会被覆盖（见 SKILL.md）。
 
 ## C. 历史学期
 
-`lw sync --term 2025-2026-2`，之后用 `--term 2025-2026-2` 筛选。
+学期代码格式为“学年-学期”，如 2025-2026-2（2025–2026 学年第二学期；第 3 学期是夏季小学期）。`lw sync --term 2025-2026-2` 同步该学期的课表和录像（不确定有哪些学期时随便写一个，报错信息会列出云课堂里可选的学期），之后 `lw lectures/process/status` 等都加 `--term 2025-2026-2`。不加 `--term` 时一律指最新同步的学期，旧学期的课时不会被顺带处理。旧学期的课程和笔记与当前学期并存在同一个知识库里，检索（`lw search`）跨学期进行。
 
 ## D. 课程资料
 

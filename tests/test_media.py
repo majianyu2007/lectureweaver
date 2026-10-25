@@ -91,3 +91,18 @@ def test_audio_only_extraction(recording, tmp_path):
     assert abs(dur - 40) < 0.5
     audio_bytes = sum(mv.track("soun").sample_sizes)
     assert rd.bytes - before == audio_bytes  # exactly the audio samples, nothing else
+
+
+def test_audio_slots_parallel_and_sequential_files():
+    from lectureweaver.pipeline import audio_slots
+
+    # two screen-recording files over the same 45 min (two projector inputs): one slot
+    det = {"teacherViewFiles": [{"id": "t", "startTime": "2026-10-22 10:09:00"}],
+           "vgaViewFiles": [{"id": "v1", "startTime": "2026-10-22 10:09:00"}, {"id": "v2", "startTime": "2026-10-22 10:09:00"}]}
+    slots = audio_slots(det)
+    assert len(slots) == 1 and [(n, f["id"]) for n, f in slots[0][1]] == [("teacher", "t"), ("vga", "v1")]
+    # a recording split in time: both halves are recognised
+    det = {"teacherViewFiles": [{"id": "a", "startTime": "2026-10-22 10:09:00"}, {"id": "b", "startTime": "2026-10-22 10:31:00"}]}
+    slots = audio_slots(det)
+    assert [[f["id"] for _, f in c] for _, c in slots] == [["a"], ["b"]]
+    assert (slots[1][0] - slots[0][0]).total_seconds() == 22 * 60

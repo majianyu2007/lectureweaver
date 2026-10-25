@@ -37,6 +37,7 @@ from .kb import KB, loads
 from .platform.ylb import player_url
 
 T_RE = re.compile(r"\{t\s+(\d{1,2}:\d{2}(?::\d{2})?)\s*\}")
+T_RUN_RE = re.compile(r"(\{t\s+[^}]*\})(?:[ \t]*\{t\s+[^}]*\})+")
 F_RE = re.compile(r"\{f\s+(F\d{3,})\s*\}")
 M_RE = re.compile(r"\{m\s+(m_[0-9a-f]{6,})(?:\s+([^}]*))?\}")
 FRONT_RE = re.compile(r"\A---\n(.*?)\n---\n", re.S)
@@ -81,11 +82,12 @@ def _recs_with_windows(kb: KB, lecture_id: str) -> list[dict]:
     for r in kb.q("SELECT * FROM recordings WHERE lecture_id=? ORDER BY start_time", lecture_id):
         det = loads(r["detail"], {}) or {}
         files = det.get("vgaViewFiles") or det.get("teacherViewFiles") or []
-        start = (files[0].get("startTime") if files else None) or r["start_time"]
-        end = (files[0].get("endTime") if files else None) or r["end_time"]
+        starts = [f.get("startTime") for f in files if f.get("startTime")] or [r["start_time"]]
+        ends = [f.get("endTime") for f in files if f.get("endTime")] or [r["end_time"]]
         try:
-            s = datetime.fromisoformat(start[:19])
-            e = datetime.fromisoformat(end[:19])
+            # the player plays from the first file; later files extend the window
+            s = datetime.fromisoformat(starts[0][:19])
+            e = max(datetime.fromisoformat(x[:19]) for x in ends)
         except (TypeError, ValueError):
             continue
         out.append({"id": r["id"], "start": s, "end": e, "ctid": r["course_table_id"]})
@@ -132,7 +134,8 @@ def render(kb: KB, note: dict, source: str, note_path: Path, root: Path) -> Rend
             warnings.append(f"{clock} 附近 90 秒内没有转写或截图，请确认这个时间点")
         n_t += 1
         off = max(0, int((when - rec["start"]).total_seconds()))
-        return f"[{clock}]({player_url(rec['ctid'], rec['id'], off)})"
+        # minutes are enough to read; the link itself seeks to the second
+        return f"[{clock[:5]}]({player_url(rec['ctid'], rec['id'], off)})"
 
     def f_sub(m):
         nonlocal n_f
@@ -165,7 +168,10 @@ def render(kb: KB, note: dict, source: str, note_path: Path, root: Path) -> Rend
         label = f"《{r['title'] or r['filename']}》{(' ' + loc) if loc else ''}"
         return f"[{label}]({target.as_uri()}{anchor})"
 
-    body = T_RE.sub(t_sub, source)
+    warnings += style_warnings(kb, note, source)
+    # "{t a} {t b} {t c}" in a row reads as noise: one link, to the first.
+    body = T_RUN_RE.sub(lambda m: m.group(1), source)
+    body = T_RE.sub(t_sub, body)
     body = F_RE.sub(f_sub, body)
     body = M_RE.sub(m_sub, body)
     leftovers = re.findall(r"\{[tfm]\s+[^}]*\}", body)
@@ -173,7 +179,88 @@ def render(kb: KB, note: dict, source: str, note_path: Path, root: Path) -> Rend
         errors.append(f"无法识别的标记：{x}")
     if lec and n_t == 0 and segs:
         warnings.append("笔记没有引用任何课堂时间点（{t HH:MM:SS}），课堂内容将无法追溯")
+    elif lec and note.get("kind") == "lecture":
+        cited = [_secs(c) for c in T_RE.findall(source)] + [_secs(frames[f]["clock"]) for f in F_RE.findall(source) if f in frames]
+        gaps = coverage_gaps(segs, cited)
+        if gaps:
+            warnings.append("这些时段老师讲了不少，但笔记没有引用（可能漏了内容；点名、闲聊、课间可以忽略）："
+                            + "；".join(f"{a}–{b}（约 {n} 字转写）" for a, b, n in gaps[:8])
+                            + "。笔记要让人不看视频也能学全，请回到学习包核对这些时段")
     return RenderResult(body, attachments, errors, warnings, {"times": n_t, "frames": n_f, "materials": n_m})
+
+
+# Phrases where the writer talks about its own sourcing instead of the subject
+# ("不是课堂给出的结论", "未伪造运行结果"). Provenance is already carried by the
+# layout (body = classroom, [!tip] = AI) and the source block; in the text it
+# only makes the note read like a compliance report.
+META_RE = re.compile(
+    r"不是课堂(给出|讲)|并非(本节|课堂|老师)|伪造|补造|冒充|编造|不还原|"
+    r"如实(保留|记录|标注)|(以|按)截图(为准|核对)|截图(未|没有)给出|画面未给出|"
+    r"(课堂|课上|本节|老师)(并)?(未|没有)(展开|给出|演示|讲解|说明)|不声称|未在此展开"
+)
+CONTRAST_RE = re.compile(r"不是[^。；\n]{1,30}而是|不等于|不要把|不能把|并不是|不意味着")
+
+
+def style_warnings(kb: KB, note: dict, source: str) -> list[str]:
+    """Readability checks on a draft (warnings only; see note-guide.md)."""
+    out: list[str] = []
+    body = re.sub(r"```.*?```", "", source, flags=re.S)
+    m = re.search(r"^#\s+(.+)$", source, re.M)
+    if m and note.get("kind") == "lecture":
+        title = m.group(1).strip()
+        course = None
+        if note.get("course_id"):
+            c = kb.q1("SELECT name FROM courses WHERE id=?", note["course_id"])
+            course = c["name"] if c else None
+        if len(title) > 20 or re.search(r"第\s*\d+\s*周|\d{4}-\d{2}-\d{2}|周[一二三四五六日]", title) or (course and course in title):
+            out.append(f"标题“{title}”太长或含课程名/日期/周次（文件名已有日期和周次）：写成 ≤20 字的主题，如“递归与回溯”")
+    paras = []
+    for p in re.split(r"\n\s*\n", body):
+        lines = p.strip().splitlines()
+        # each list item / table row is its own point and may carry its own time
+        if lines and all(re.match(r"\s*(\d+[.)、]|[-*+]|\|)", ln) for ln in lines):
+            paras += lines
+        elif p.strip():
+            paras.append(p)
+    crowded = [p for p in paras if len(T_RE.findall(T_RUN_RE.sub(lambda x: x.group(1), p))) > 2]
+    if crowded:
+        out.append(f"有 {len(crowded)} 段挂了 3 个以上时间点：每段（或每个要点）放 1 个，放在这段内容开始的地方即可")
+    if "\n## 资料说明" in "\n" + source:
+        out.append("“资料说明”由 lw note save 自动生成，草稿里不用写这一节")
+    meta = [x.group(0) for x in META_RE.finditer(body)]
+    if meta:
+        out.append("正文里有交代出处/自证没编造的话（" + "、".join(dict.fromkeys(meta[:6])) + "）："
+                   "来源靠排版区分（正文=课堂，[!tip]=AI 补充），素材缺口只在受影响处写一句，删掉这些句子")
+    n_contrast = len(CONTRAST_RE.findall(body))
+    if n_contrast >= 4:
+        out.append(f"“不是……而是/不等于/不要把……”出现 {n_contrast} 次：除非老师本人做了这个对比，直接写正面结论")
+    n_f = len(F_RE.findall(source))
+    if n_f > 18:
+        out.append(f"插了 {n_f} 张截图：只留文字说不清的（最终代码、关键图表/板书、演示过程图），一般 6–15 张")
+    return out
+
+
+def coverage_gaps(segs: list[dict], cited: list[int], radius: int = 180, min_chars: int = 600) -> list[tuple[str, str, int]]:
+    """Stretches of transcript with no time point or screenshot of the note
+    within ``radius`` seconds, holding at least ``min_chars`` of speech.
+    Returns [(from clock, to clock, chars)]."""
+    cited = sorted(cited)
+    out, cur = [], None
+    for sg in sorted((x for x in segs if ":" in x.get("clock", "")), key=lambda x: (x.get("rec", ""), _secs(x["clock"]))):
+        t = _secs(sg["clock"])
+        near = cited and min(abs(t - c) for c in cited) <= radius
+        if near or (cur and cur["rec"] != sg.get("rec")):
+            if cur and cur["chars"] >= min_chars:
+                out.append((cur["a"], cur["b"], cur["chars"]))
+            cur = None
+        if not near:
+            if cur is None:
+                cur = {"rec": sg.get("rec"), "a": sg["clock"][:5], "b": sg["clock"][:5], "chars": 0}
+            cur["b"] = sg["clock"][:5]
+            cur["chars"] += len(sg.get("text", ""))
+    if cur and cur["chars"] >= min_chars:
+        out.append((cur["a"], cur["b"], cur["chars"]))
+    return out
 
 
 def _url(rel: str) -> str:
@@ -228,19 +315,20 @@ def provenance_block(kb: KB, note: dict) -> str:
     d = kb.abs(lec["dir"])
     tr = _load(d / "transcript.json", {})
     fr = _load(d / "frames.json", {})
-    lines = [PROV_START, "", "## 资料说明", ""]
+    # A folded callout: available when needed, out of the way when reading.
+    items = []
     for i, r in enumerate(_recs_with_windows(kb, lec["id"]), 1):
         src = next((s for s in tr.get("sources", []) if s.get("rec") == r["id"]), {})
         kind = {"platform": "云课堂转写", "asr": f"本地语音识别（{src.get('model', '')}）", "none": "无转写"}.get(src.get("kind", "none"), "无转写")
         if src.get("reason"):
             kind += f"（{src['reason']}）"
-        lines.append(f"- 录像第{i}段 {r['start']:%H:%M}–{r['end']:%H:%M}：[在云课堂打开]({player_url(r['ctid'], r['id'], 0)})；转写：{kind}")
+        items.append(f"第{i}段录像 {r['start']:%H:%M}–{r['end']:%H:%M}（[回看]({player_url(r['ctid'], r['id'], 0)})）：{kind}")
     nf = len(fr.get("frames", []))
-    lines.append(f"- 截图：自动从录屏关键帧挑选 {nf} 张（只保存截图，未保存视频）；文字识别为本地 OCR，代码以截图为准")
+    items.append(f"截图从录屏关键帧中挑选（共 {nf} 张，未保存视频），文字由本地 OCR 识别")
     if lec["match_note"]:
-        lines.append(f"- 课表对应：{lec['match_note']}")
-    lines.append("- 时间点为录像墙钟时间，点击可在云课堂对应位置播放（需在浏览器登录）。转写有同音错字，存疑处已标注。")
-    lines += ["", PROV_END]
+        items.append(f"课表对应：{lec['match_note']}")
+    items.append("文中时间可点击，在云课堂从该处播放（需在浏览器登录）。正文是课堂内容，“AI 补充”是课后补充的解释")
+    lines = [PROV_START, "> [!info]- 来源", *[f"> - {x}" for x in items], PROV_END]
     return "\n".join(lines)
 
 
@@ -426,6 +514,9 @@ def save(kb: KB, note: dict, draft: str, meta: dict, mode: str = "safe", title: 
     version = (kb.q1("SELECT MAX(version) AS v FROM note_versions WHERE note_id=?", note["id"])["v"] or 0) + 1
     final = assemble(kb, note, version, rr.text, meta)
     _store_version(kb, note, final, "ai", meta)
+    # Keep the draft with its {t}/{f}/{m} markup, so the note can be rendered
+    # again (e.g. after a layout change) without asking a model to rewrite it.
+    kb.abs(f"notes/{note['id']}/v{version:04d}-ai.draft.md").write_text(draft, "utf-8")
     _copy_attachments(rr.attachments, root / note_folder(kb, note))
     out = SaveOutcome(note["id"], version, False, vault_rel, warnings=rr.warnings)
 

@@ -31,10 +31,35 @@ def test_render_validates_and_links(kb, lec):
     out = N.save(kb, note, DRAFT, {"model": "test"})
     assert out.exported and out.version == 1
     text = vault_file(kb, note["id"]).read_text("utf-8")
-    assert "[10:10:00](https://ylb.nwafu.edu.cn/" in text and "latestWatchTime=60" in text
+    assert "[10:10](https://ylb.nwafu.edu.cn/" in text and "latestWatchTime=60" in text
     assert "](attachments/" in text and "F001.webp" in text
     assert (N.notes_root() / "Java语言程序设计/attachments" / lec / "F001.webp").exists()
-    assert "## 资料说明" in text and "lw_id: N-" in text
+    assert "> [!info]- 来源" in text and "lw_id: N-" in text
+    # the draft with its markup is kept next to the rendered version
+    assert kb.abs(f"notes/{note['id']}/v0001-ai.draft.md").read_text("utf-8") == DRAFT
+
+
+def test_adjacent_time_points_collapse_to_one_link(kb, lec):
+    note = N.get_or_create(kb, "lecture", lec)
+    N.save(kb, note, "# 拷贝\n\n读到 -1 结束 {t 10:10:00} {t 10:11:00} {t 10:12:00}\n", {})
+    text = vault_file(kb, note["id"]).read_text("utf-8")
+    body = text.split("<!-- lw:sources -->")[0]
+    assert body.count("](https://ylb.nwafu.edu.cn/") == 1 and "latestWatchTime=60" in body
+
+
+def test_style_warnings_flag_ai_habits(kb, lec):
+    note = N.get_or_create(kb, "lecture", lec)
+    draft = (
+        "# Java语言程序设计 第7周 周二：文件拷贝与缓冲流的完整讲解\n\n"
+        "老师用例子说明返回值 {t 10:10:00}，这里 {t 10:11:00} 还有 {t 10:12:00} 以及 {t 10:13:00}。\n\n"
+        "这是根据截图推导，不是课堂给出的结论；未伪造运行结果。\n\n## 资料说明\n略\n"
+    )
+    rr = N.render(kb, note, draft, N.notes_root() / "x.md", N.notes_root())
+    w = "\n".join(rr.warnings)
+    assert not rr.errors
+    assert "标题" in w and "时间点" in w and "资料说明" in w and "伪造" in w
+    clean = N.render(kb, note, "# 文件拷贝\n\nread 返回 -1 表示读完 {t 10:10:00}\n", N.notes_root() / "x.md", N.notes_root())
+    assert clean.warnings == []
 
 
 @pytest.mark.parametrize("bad, msg", [
@@ -123,8 +148,16 @@ def test_non_lecture_note_and_material_link(kb, lec, tmp_path):
     f = tmp_path / "guide.md"
     f.write_text("# 实验指导书\n\n实现文件拷贝程序，并统计耗时。\n", encoding="utf-8")
     m, new, _ = M.import_file(kb, f, title="实验指导书")
-    note = N.get_or_create(kb, "review", course_id="2026-2027-1:2094300", key="第7周复习")
+    note = N.get_or_create(kb, "review", course_id="2026-2027-1:1234567", key="第7周复习")
     out = N.save(kb, note, f"# 第7周复习\n\n实验要求见 {{m {m['id']} p.1}}。\n", {})
     t = (N.notes_root() / out.vault_path).read_text("utf-8")
     assert "《实验指导书》 p.1" in t and "file://" in t
     assert out.vault_path.startswith("Java语言程序设计/复习/")
+
+
+def test_coverage_gaps_point_at_uncited_teaching():
+    segs = [{"rec": "r1", "clock": f"10:{m:02d}:00", "text": "讲" * 200} for m in range(10, 40)]
+    # cited at the start and the end only: the middle stretch is reported
+    gaps = N.coverage_gaps(segs, [N._secs("10:10:00"), N._secs("10:39:00")])
+    assert gaps and gaps[0][0] == "10:14" and gaps[0][1] == "10:35"
+    assert N.coverage_gaps(segs, [N._secs(f"10:{m:02d}:00") for m in range(10, 40, 5)]) == []

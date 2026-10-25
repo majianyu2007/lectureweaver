@@ -23,7 +23,7 @@ def kb(isolated_env):
     k.close()
 
 
-def make_course(kb, cid="2026-2027-1:2094300", name="Java语言程序设计", code="2094300", subject="programming"):
+def make_course(kb, cid="2026-2027-1:1234567", name="Java语言程序设计", code="1234567", subject="programming"):
     from lectureweaver.kb import dumps
 
     kb.x(
@@ -34,7 +34,7 @@ def make_course(kb, cid="2026-2027-1:2094300", name="Java语言程序设计", co
     return cid
 
 
-def make_lecture(kb, course_id, lid="2026-10-20_2094300_p3-4", date="2026-10-20", segs=((3, "10:09:00", "10:55:00"), (4, "11:04:00", "11:49:59"))):
+def make_lecture(kb, course_id, lid="2026-10-20_1234567_p3-4", date="2026-10-20", segs=((3, "10:09:00", "10:55:00"), (4, "11:04:00", "11:49:59"))):
     """A processed lecture with transcript + frames on disk (no network)."""
     from PIL import Image
 

@@ -111,3 +111,36 @@ def test_rapidocr_reads_text(monkeypatch, tmp_path):
     assert "FileInputStream" in text.replace(" ", ""), text
     assert all(0 <= l["conf"] <= 1 and len(l["box"]) == 4 for l in res["lines"])
     ocr.backend.cache_clear()
+
+
+def test_blocking_lock_waits_for_release(tmp_path):
+    import threading
+    import time
+
+    from lectureweaver.kb import try_lock
+
+    held = try_lock(tmp_path / "asr.lock")
+    threading.Timer(0.5, held.close).start()
+    t0 = time.time()
+    got = try_lock(tmp_path / "asr.lock", wait=True)
+    assert got is not None and time.time() - t0 >= 0.4
+    got.close()
+
+
+def test_process_skips_a_lecture_another_worker_holds(kb, capsys):
+    from conftest import make_course, make_lecture
+    from lectureweaver.cli import main
+    from lectureweaver.commands import lecture_lock
+    from lectureweaver.kb import try_lock
+
+    lid = make_lecture(kb, make_course(kb))
+    kb.x("DELETE FROM stages WHERE lecture_id=?", lid)
+    kb.db.commit()
+    held = try_lock(lecture_lock(kb, lid))
+    try:
+        main(["process", "-l", lid])
+    finally:
+        held.close()
+    out = capsys.readouterr().out
+    assert "正在处理这个课时，跳过" in out and lid in out
+    assert kb.stage(lid, "details") is None  # nothing was run

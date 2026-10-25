@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from pathlib import Path
 
@@ -170,6 +171,7 @@ def _add_filters(p):
     p.add_argument("--until", help="结束日期（含）")
     p.add_argument("--lecture", "-l", action="append", help="课时 ID（可多次）")
     p.add_argument("--unprocessed", action="store_true", help="只选尚未整理完成的课时")
+    p.add_argument("--ready", action="store_true", help="只选素材已整理好、还没有笔记的课时（可以开始写笔记）")
     p.add_argument("--status", help="按匹配状态筛选：matched/unscheduled/ambiguous/incomplete/manual")
     p.add_argument("--term", help="学期，如 2026-2027-1（默认最新）")
     p.add_argument("--limit", type=int)
@@ -180,7 +182,7 @@ def _filters(args):
 
     return Filters(
         course=args.course, week=args.week, date=args.date, since=args.since, until=args.until,
-        lecture=args.lecture, unprocessed=args.unprocessed, status=args.status, term=args.term, limit=args.limit,
+        lecture=args.lecture, unprocessed=args.unprocessed, ready=args.ready, status=args.status, term=args.term, limit=args.limit,
     )
 
 
@@ -193,7 +195,7 @@ def spec_setup(sub):
     p.add_argument("--whisper-bin", help="whisper.cpp 的 whisper-cli 路径（不在 PATH 里时）")
     p.add_argument("--whisper-model", help="whisper 模型文件（默认在 ~/.cache/whisper/ 下查找）")
     p = _add(sub, "sync", cmd_sync, "同步课表与课堂实录元数据（不下载视频）")
-    p.add_argument("--term", help="学期，如 2025-2026-2（默认当前学期）")
+    p.add_argument("--term", help="学期，如 2025-2026-2（默认当前学期；写错时会列出云课堂里可选的学期）")
     p.add_argument("--no-timetable", action="store_true", help="不访问教务课表")
     p = _add(sub, "courses", cmd_courses, "列出课程")
     p.add_argument("--term")
@@ -236,6 +238,8 @@ def cmd_sync(args):
     s = Session()
     try:
         rep = sync(kb, s, term=args.term, with_timetable=not args.no_timetable)
+    except ValueError as e:  # unknown term: the message lists the available ones
+        raise UserError(str(e))
     finally:
         s.close()
         kb.close()
@@ -257,7 +261,7 @@ def cmd_courses(args):
     kb = _kb()
     term = args.term or current_term(kb)
     rows = kb.q(
-        """SELECT c.*, (SELECT COUNT(*) FROM lectures l WHERE l.course_id=c.id) AS n_lect,
+        """SELECT c.*, (SELECT COUNT(*) FROM lectures l WHERE l.course_id=c.id AND EXISTS (SELECT 1 FROM recordings r WHERE r.lecture_id=l.id)) AS n_lect,
            (SELECT COUNT(*) FROM materials m JOIN material_links ml ON ml.material_id=m.id WHERE ml.target_type='course' AND ml.target_id=c.id) AS n_mat
            FROM courses c WHERE term=? ORDER BY n_lect DESC, name""",
         term,
@@ -317,6 +321,7 @@ def spec_process(sub):
     p.add_argument("--stages", help="只跑这些阶段，逗号分隔")
     p.add_argument("--asr", default="auto", help="无平台转写时：auto/local（本地 whisper）、none（不识别）、或已授权的云服务名")
     p.add_argument("--dry-run", action="store_true", help="只列出将处理的课时")
+    p.add_argument("--jobs", "-j", type=int, default=3, help="同时处理几个课时（默认 3；1 = 逐个处理）")
     g = sub.add_parser("lecture", help="单个课时：详情、学习包、手动关联").add_subparsers(metavar="<子命令>")
     p = _add(g, "show", cmd_lecture_show, "查看课时详情、处理进度和素材")
     p.add_argument("lecture")
@@ -356,18 +361,26 @@ def cmd_process(args):
         emit(args, [r["id"] for r in rows], "\n".join(f"{r['id']}  {r['course_name']} {lecture_label(r)}" for r in rows))
         return 0
     stages = args.stages.split(",") if args.stages else STAGES
+    if args.jobs > 1 and len(rows) > 1:
+        return _process_parallel(args, kb, rows)
     from .kb import try_lock
 
-    lock = try_lock(kb.root / ".process.lock")  # held until this process exits
-    if lock is None:
-        raise UserError("另一个 lw process 正在处理这个知识库，请等它结束（或确认它已退出）后再运行")
     pipe = Pipeline(kb, log=lambda m: print(m, flush=True), force=set(args.force), asr=args.asr)
     results = {}
     total_in = 0
+    busy = []
     try:
         for i, r in enumerate(rows, 1):
             print(f"[{i}/{len(rows)}] {r['course_name']} {lecture_label(r)}（{r['id']}）", flush=True)
-            res = pipe.run(r, stages)
+            lock = try_lock(lecture_lock(kb, r["id"]))
+            if lock is None:
+                print("  另一个 lw process 正在处理这个课时，跳过", flush=True)
+                busy.append(r["id"])
+                continue
+            try:
+                res = pipe.run(r, stages)
+            finally:
+                lock.close()
             results[r["id"]] = res
             for st, msg in res.items():
                 print(f"  {st}: {msg}", flush=True)
@@ -377,7 +390,80 @@ def cmd_process(args):
             pipe.session.close()
     from .media import human_bytes
 
-    emit(args, results, f"完成 {len(rows)} 个课时；这些课时各处理阶段（按最近一次运行计）共从学校服务器传输 {human_bytes(total_in)}，未保存任何视频。")
+    msg = f"完成 {len(results)} 个课时；这些课时各处理阶段（按最近一次运行计）共从学校服务器传输 {human_bytes(total_in)}，未保存任何视频。"
+    if busy:
+        msg += f"\n{len(busy)} 个课时正被另一个 lw process 处理，已跳过：{', '.join(busy)}"
+    emit(args, results, msg)
+
+
+def lecture_lock(kb, lecture_id: str) -> Path:
+    return kb.root / ".locks" / f"{lecture_id}.lock"
+
+
+def _process_parallel(args, kb, rows) -> int:
+    """Run up to ``--jobs`` lectures at once, each in its own ``lw process`` worker.
+
+    Downloads and OCR of different lectures overlap; local speech recognition
+    (CPU-bound) is still done one lecture at a time (see Pipeline._asr). The
+    session is checked once here so workers don't all log in at the same time.
+    """
+    import subprocess
+    import sys
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from .media import human_bytes
+    from .session import Session
+
+    s = Session()
+    try:
+        s.ylb().user_resource()
+    finally:
+        s.close()
+    extra = []
+    for f in args.force:
+        extra += ["--force", f]
+    if args.stages:
+        extra += ["--stages", args.stages]
+    extra += ["--asr", args.asr, "--jobs", "1"]
+    out_lock = threading.Lock()
+    codes: dict[str, int] = {}
+    n = len(rows)
+    print(f"共 {n} 个课时，同时处理 {min(args.jobs, n)} 个（本地语音识别仍逐个进行）", flush=True)
+
+    def work(item):
+        i, r = item
+        tag = f"[{r['course_name'][:6]} {r['date'][5:] if r['date'] else r['id']}]"
+        with out_lock:
+            print(f"{tag} 开始（{i}/{n}，{r['id']}）", flush=True)
+        cmd = [sys.executable, "-m", "lectureweaver.cli", "process", "-l", r["id"], *extra]
+        env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+        pr = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", env=env)
+        for line in pr.stdout:
+            line = line.rstrip()
+            if line and not line.startswith(("[1/1]", "完成 1 个课时")):
+                with out_lock:
+                    print(f"{tag} {line.strip()}", flush=True)
+        codes[r["id"]] = pr.wait()
+
+    pool = ThreadPoolExecutor(min(args.jobs, n))
+    try:
+        list(pool.map(work, enumerate(rows, 1)))
+    except KeyboardInterrupt:
+        pool.shutdown(wait=False, cancel_futures=True)
+        raise
+    pool.shutdown()
+    from .select import is_processed
+
+    ok = [r["id"] for r in rows if is_processed(kb, r["id"])]
+    bad = [r["id"] for r in rows if r["id"] not in ok]
+    total_in = sum(x["b"] or 0 for x in kb.q(
+        f"SELECT SUM(bytes_in) AS b FROM stages WHERE lecture_id IN ({','.join('?' * n)})", *[r["id"] for r in rows]))
+    lines = [f"完成 {len(ok)}/{n} 个课时；共从学校服务器传输 {human_bytes(total_in)}（按各阶段最近一次运行计），未保存任何视频。"]
+    if bad:
+        lines.append(f"未完成（失败、素材不完整或正被其他进程处理）：{', '.join(bad)}；用 lw lecture show <ID> 查看原因，重跑会从中断处继续")
+    emit(args, {"done": ok, "unfinished": bad, "exit_codes": codes}, "\n".join(lines))
+    return 0 if not bad else 1
 
 
 def cmd_lecture_show(args):
@@ -454,8 +540,20 @@ def cmd_lecture_assign(args):
     kb.x("UPDATE lectures SET match_status='manual', match_note=COALESCE(match_note,'')||?, updated_at=? WHERE id=?",
          f"；手动并入录像 {rec['id'][-6:]}", time.time(), lec["id"])
     kb.x("DELETE FROM stages WHERE lecture_id=? AND stage IN ('details','transcript','visual','packet')", lec["id"])
-    if old and not kb.q1("SELECT 1 FROM recordings WHERE lecture_id=?", old):
-        kb.x("UPDATE lectures SET match_status='manual', match_note='录像已手动并入 ' || ? WHERE id=?", lec["id"], old)
+    if old and old != lec["id"] and not kb.q1("SELECT 1 FROM recordings WHERE lecture_id=?", old):
+        # Nothing left in the old lecture: drop it, so it doesn't show up as a
+        # lecture still waiting for processing or a note. Keep it only if a
+        # note already refers to it.
+        if kb.q1("SELECT 1 FROM notes WHERE lecture_id=?", old):
+            kb.x("UPDATE lectures SET match_status='manual', match_note='录像已手动并入 ' || ? WHERE id=?", lec["id"], old)
+        else:
+            row = kb.q1("SELECT dir FROM lectures WHERE id=?", old)
+            kb.x("DELETE FROM search WHERE lecture_id=?", old)
+            kb.x("DELETE FROM lectures WHERE id=?", old)
+            if row and row["dir"]:
+                import shutil
+
+                shutil.rmtree(kb.abs(row["dir"]), ignore_errors=True)
     kb.db.commit()
     kb.close()
     emit(args, {"ok": True}, f"已把录像并入 {lec['id']}；该课时需要重新处理（lw process -l {lec['id']}）")
@@ -480,7 +578,7 @@ def cmd_status(args):
     out = []
     lines = []
     for c in courses:
-        lects = kb.q("SELECT id, match_status FROM lectures WHERE course_id=? ORDER BY date", c["id"])
+        lects = kb.q("SELECT id, match_status FROM lectures l WHERE course_id=? AND EXISTS (SELECT 1 FROM recordings r WHERE r.lecture_id=l.id) ORDER BY date", c["id"])
         if not lects:
             continue
         done = partial = failed = none = noted = 0
@@ -573,7 +671,7 @@ def cmd_note_save(args):
         if args.check:
             rr = N.render(kb, note, draft, N.notes_root() / (note.get("vault_path") or "x.md"), N.notes_root())
             emit(args, {"errors": rr.errors, "warnings": rr.warnings, "stats": rr.stats},
-                 "\n".join(["校验通过" if not rr.errors else "有错误："] + [f"- {e}" for e in rr.errors] + [f"- 提醒：{w}" for w in rr.warnings]) + f"\n统计：{rr.stats}")
+                 "\n".join([("有错误：" if rr.errors else f"引用校验通过；有 {len(rr.warnings)} 条写作提醒，建议改完再保存：" if rr.warnings else "校验通过")] + [f"- {e}" for e in rr.errors] + [f"- 提醒：{w}" for w in rr.warnings]) + f"\n统计：{rr.stats}")
             return 1 if rr.errors else 0
         mode = "replace" if args.replace else ("merge" if args.merge else "safe")
         out = N.save(kb, note, draft, {"model": args.model, "style": args.style}, mode=mode, title=args.title, allow_drop=args.allow_drop)
@@ -1172,8 +1270,8 @@ def cmd_course_set(args):
 def spec_doctor(sub):
     _add(sub, "doctor", cmd_doctor, "检查运行环境、登录、知识库、笔记目录与授权（AI 每次开始工作前先运行）")
     g = sub.add_parser("skill", help="安装 lecture-weaver Skill 到 AI 工具").add_subparsers(metavar="<子命令>")
-    p = _add(g, "install", cmd_skill_install, "把 Skill 安装到 ~/.claude/skills 与 ~/.codex/skills（优先链接，Windows 无权限时复制）")
-    p.add_argument("--target", action="append", choices=["claude", "codex"], help="默认两者都装")
+    p = _add(g, "install", cmd_skill_install, "把 Skill 安装到 Claude Code / Codex / oh-my-pi 的 skills 目录（优先链接，Windows 无权限时复制）")
+    p.add_argument("--target", action="append", choices=list(SKILL_DIRS), help="默认 claude 和 codex")
 
 
 def cmd_doctor(args):
@@ -1226,6 +1324,9 @@ def cmd_doctor(args):
     emit(args, checks, "\n".join(lines))
 
 
+SKILL_DIRS = {"claude": ".claude/skills", "codex": ".codex/skills", "omp": ".omp/agent/skills"}
+
+
 def cmd_skill_install(args):
     src = Path(__file__).resolve().parents[2] / "skill" / "lecture-weaver"
     if not src.exists():
@@ -1233,7 +1334,7 @@ def cmd_skill_install(args):
     targets = args.target or ["claude", "codex"]
     done = []
     for t in targets:
-        base = Path.home() / (".claude" if t == "claude" else ".codex") / "skills"
+        base = Path.home() / SKILL_DIRS[t]
         base.mkdir(parents=True, exist_ok=True)
         dst = base / "lecture-weaver"
         if dst.is_symlink() or dst.exists():

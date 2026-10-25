@@ -190,6 +190,13 @@ class KB:
         self.db = sqlite3.connect(self.path, timeout=30)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA foreign_keys = ON")
+        # Several `lw process` workers may write at once: WAL lets readers and
+        # one writer proceed together, busy_timeout makes writers queue.
+        try:
+            self.db.execute("PRAGMA journal_mode = WAL")
+        except sqlite3.OperationalError:
+            pass  # e.g. a file system without shared memory; rollback journal still works
+        self.db.execute("PRAGMA busy_timeout = 30000")
         self.db.executescript(SCHEMA)
         self._migrate()
         for d in ("lectures", "materials", "notes"):
@@ -300,24 +307,30 @@ class KB:
         self.db.commit()
 
 
-def try_lock(path: Path):
-    """Non-blocking exclusive lock on ``path``; returns the open file (keep it)
-    or None if another process holds it. Works on macOS, Linux and Windows."""
+def try_lock(path: Path, wait: bool = False):
+    """Exclusive lock on ``path``; returns the open file (keep it, closing it
+    releases the lock). Non-blocking by default: None if another process holds
+    it. ``wait=True`` blocks until the lock is free. Works on macOS, Linux and
+    Windows."""
+    path.parent.mkdir(parents=True, exist_ok=True)
     f = open(path, "a+", encoding="utf-8")
-    try:
-        if os.name == "nt":
-            import msvcrt
+    while True:
+        try:
+            if os.name == "nt":
+                import msvcrt
 
-            f.seek(0)
-            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
 
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        f.close()
-        return None
-    return f
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return f
+        except OSError:
+            if not wait:
+                f.close()
+                return None
+            time.sleep(2)
 
 
 def dumps(v: Any) -> str:

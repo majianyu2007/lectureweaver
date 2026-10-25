@@ -52,6 +52,7 @@ class Filters:
     until: str | None = None
     lecture: list[str] | None = None
     unprocessed: bool = False
+    ready: bool = False  # materials processed, no lecture note yet
     status: str | None = None
     term: str | None = None
     limit: int | None = None
@@ -100,15 +101,23 @@ def select_lectures(kb: KB, f: Filters) -> list:
     if f.status:
         where.append("l.match_status=?")
         args.append(f.status)
+    # A lecture whose recordings were all merged elsewhere has nothing to process.
+    where.append("EXISTS (SELECT 1 FROM recordings r WHERE r.lecture_id=l.id)")
     rows = kb.q(
         f"SELECT l.*, c.name AS course_name FROM lectures l JOIN courses c ON c.id=l.course_id WHERE {' AND '.join(where)} ORDER BY l.date, l.start_period",
         *args,
     )
     if f.unprocessed:
         rows = [r for r in rows if not is_processed(kb, r["id"])]
+    if f.ready:
+        rows = [r for r in rows if is_processed(kb, r["id"]) and not has_note(kb, r["id"])]
     if f.limit:
         rows = rows[: f.limit]
     return rows
+
+
+def has_note(kb: KB, lecture_id: str) -> bool:
+    return kb.q1("SELECT 1 FROM notes WHERE lecture_id=? AND kind='lecture' AND current_version>0", lecture_id) is not None
 
 
 def is_processed(kb: KB, lecture_id: str) -> bool:

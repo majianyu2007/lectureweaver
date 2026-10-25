@@ -27,14 +27,14 @@ def test_import_docx_pptx_code(kb, tmp_path):
 def test_link_suggest_and_search(kb, tmp_path):
     cid = make_course(kb)
     lid = make_lecture(kb, cid)
-    make_lecture(kb, cid, lid="2026-10-13_2094300_p3-4", date="2026-10-13")
+    make_lecture(kb, cid, lid="2026-10-13_1234567_p3-4", date="2026-10-13")
     kb.index_replace("transcript", lid, [("[10:10:00] read 方法返回成功读取的字节个数", lid, cid, None)])
     f = tmp_path / "guide.md"
     f.write_text("实验：read 方法 成功读取 字节个数", encoding="utf-8")
     m, _, _ = M.import_file(kb, f)
     M.link(kb, m["id"], "course", cid, "lab_guide")
     sug = M.suggest_lectures(kb, m["id"], cid)
-    assert sug and sug[0]["lecture"] in (lid, "2026-10-13_2094300_p3-4")
+    assert sug and sug[0]["lecture"] in (lid, "2026-10-13_1234567_p3-4")
     hits = search(kb, "字节个数")
     kinds = {h["kind"] for h in hits}
     assert {"transcript", "material"} <= kinds

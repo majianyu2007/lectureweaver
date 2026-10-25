@@ -61,7 +61,7 @@ def _class_ids(v) -> list[str]:
         x = x.strip()
         if not x:
             continue
-        m = re.search(r"(\d{18})$", x)  # '46S01202620271219106946' → JXBID suffix
+        m = re.search(r"(\d{18})$", x)  # 'XXS01' + 18-digit JXBID → JXBID suffix
         out.append(m.group(1) if m else x)
     return sorted(set(out))
 
@@ -359,6 +359,10 @@ def build_lectures(kb: KB, term_code: str, cal: TermCalendar | None) -> None:
         teacher = next((r["teacher"] for r in rs if r["teacher"]), course["teacher"])
         room = next((r["room"] for r in rs if r["room"]), slot["room"] if slot else None)
         ldir = f"lectures/{term_code}/{_slug(code + '-' + course['name'])}/{lid}"
+        if existing and existing["match_status"] == "manual" and existing["platform_group"] and existing["platform_group"] != (gkey if kind == "g" else None):
+            # Recordings the user merged into another lecture (lw lecture
+            # assign): they stay there, and must not overwrite its fields.
+            continue
         if existing:
             manual = existing["match_status"] == "manual"
             kb.x(

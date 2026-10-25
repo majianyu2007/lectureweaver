@@ -16,6 +16,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
+
 from .media import MediaError, ffmpeg_bin
 from .mp4index import adts_header, coalesce, parse_movie
 from .visual import RangeReader
@@ -114,14 +116,18 @@ def choose_audio_source(candidates: list[tuple[str, RangeReader]], work: Path, w
     """Pick the stream that actually carries the lecture audio.
 
     Which camera records the teacher's microphone differs between rooms and
-    days (2026-10-13 in N8420: teacher stream ~11 kbps of silence, screen
+    days (one room, one day: teacher stream ~11 kbps of silence, screen
     recording 129 kbps of speech), so every stream is sampled: three short
     excerpts are fetched by byte range, decoded and measured with VAD.
     """
     scored = []
+    net_errors = []
     for name, rd in candidates:
         try:
             movie = parse_movie(rd.read, rd.size())
+        except httpx.HTTPError as e:
+            net_errors.append(f"{name}: {e}")
+            continue
         except Exception:  # noqa: BLE001
             continue
         tr = movie.track("soun")
@@ -139,6 +145,9 @@ def choose_audio_source(candidates: list[tuple[str, RangeReader]], work: Path, w
             wav = work / f"probe_{name}.wav"
             _decode_adts(tr.asc, tr.channels, _read_samples(rd, excerpts, max_gap), wav)
             sp = speech_seconds(wav)
+        except httpx.HTTPError as e:
+            net_errors.append(f"{name}: {e}")
+            continue
         except Exception:  # noqa: BLE001
             continue
         if interleaved:
@@ -147,6 +156,10 @@ def choose_audio_source(candidates: list[tuple[str, RangeReader]], work: Path, w
             est = sum(tr.sample_sizes)
         scored.append(AudioChoice(rd, tr, name, sp, est, max_gap, [f"{name}: 抽样 {windows}×{win_s:.0f}s 检出语音 {sp:.0f}s，音频码率 {sum(tr.sample_sizes) * 8 / dur / 1000:.0f}kbps"]))
     if not scored:
+        if net_errors:
+            # A network problem, not an unusual file: streaming the whole
+            # recording instead would only fail more slowly. Re-run later.
+            raise MediaError("读取录像时网络中断，稍后重跑 lw process 即可续上（" + "；".join(net_errors)[:200] + "）")
         return None
     best_speech = max(c.speech_s for c in scored)
     # streams within 80% of the best speech amount are equivalent; then cheapest

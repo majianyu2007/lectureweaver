@@ -25,6 +25,7 @@ import concurrent.futures
 import io
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -55,14 +56,23 @@ class RangeReader:
 
     def size(self) -> int:
         if self._size is None:
-            r = self.client.head(self.url)
+            for attempt in range(4):
+                try:
+                    r = self.client.head(self.url)
+                    break
+                except httpx.HTTPError:
+                    if attempt == 3:
+                        raise
+                    time.sleep(2 ** attempt)
             if r.status_code >= 400:
                 raise MediaError(f"无法访问录像文件（HTTP {r.status_code}）")
             self._size = int(r.headers["content-length"])
         return self._size
 
-    def read(self, off: int, length: int) -> bytes:
-        for attempt in range(3):
+    def read(self, off: int, length: int, attempts: int = 5) -> bytes:
+        # The campus link drops long transfers now and then (e.g. a stream
+        # ending 2 MB short of 730 MB); retry with backoff.
+        for attempt in range(attempts):
             try:
                 r = self.client.get(self.url, headers={"Range": f"bytes={off}-{off + length - 1}"})
                 if r.status_code != 206:
@@ -70,10 +80,13 @@ class RangeReader:
                 with self._lock:
                     self.bytes += len(r.content)
                     self.requests += 1
+                if len(r.content) < length and off + len(r.content) < self.size():
+                    raise httpx.ReadError(f"short read {len(r.content)}/{length}")
                 return r.content
             except httpx.HTTPError:
-                if attempt == 2:
+                if attempt == attempts - 1:
                     raise
+                time.sleep(min(2 ** attempt, 15))
         raise AssertionError
 
     def close(self) -> None:

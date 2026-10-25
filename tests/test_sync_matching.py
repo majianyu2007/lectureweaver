@@ -9,12 +9,12 @@ from conftest import make_course
 CAL = TermCalendar("2026-2027-1", date(2026, 9, 7), 20)
 
 
-def add_tt(kb, cid, weekday, a, b, weeks="1" * 20, room="N8420", raw=None):
+def add_tt(kb, cid, weekday, a, b, weeks="1" * 20, room="A101", raw=None):
     kb.x("INSERT INTO timetable(id,course_id,term,class_id,weekday,start_period,end_period,weeks,weeks_label,room,teacher,raw) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
          f"tt{weekday}{a}{room}", cid, "2026-2027-1", "202620279999990001", weekday, a, b, weeks, "", room, "张老师", dumps(raw or {}))
 
 
-def add_rec(kb, cid, rid, start, end, seg, group, week="7", room="N8420"):
+def add_rec(kb, cid, rid, start, end, seg, group, week="7", room="A101"):
     raw = {"startTime": start, "endTime": end, "week": week}
     kb.x("INSERT INTO recordings(id,course_id,name,start_time,end_time,week,weekday,segment,room,course_table_detail_id,raw) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
          rid, cid, rid, start, end, int(week) if week else None, None, seg, room, group, dumps(raw))
@@ -29,10 +29,10 @@ def test_groups_periods_and_matches_timetable(kb):
     ls = kb.q("SELECT * FROM lectures")
     assert len(ls) == 1
     l = ls[0]
-    assert (l["id"], l["week"], l["start_period"], l["end_period"], l["match_status"]) == ("2026-10-20_2094300_p3-4", 7, 3, 4, "matched")
+    assert (l["id"], l["week"], l["start_period"], l["end_period"], l["match_status"]) == ("2026-10-20_1234567_p3-4", 7, 3, 4, "matched")
     # re-running keeps the id and does not duplicate
     build_lectures(kb, "2026-2027-1", CAL)
-    assert [r["id"] for r in kb.q("SELECT id FROM lectures")] == ["2026-10-20_2094300_p3-4"]
+    assert [r["id"] for r in kb.q("SELECT id FROM lectures")] == ["2026-10-20_1234567_p3-4"]
 
 
 def test_missing_week_is_computed_and_noted(kb):
@@ -70,7 +70,7 @@ def test_unscheduled_and_adhoc(kb):
     sat = next(v for k, v in st.items() if k.startswith("2026-10-24"))
     assert sat[0] == "unscheduled" and "找不到对应时段" in sat[1]
     clip = next(v for k, v in st.items() if "_g" in k)
-    assert clip[0] == "unscheduled" and "临时录制" in clip[1] and "2026-10-20_2094300_p3-4" in clip[1]
+    assert clip[0] == "unscheduled" and "临时录制" in clip[1] and "2026-10-20_1234567_p3-4" in clip[1]
 
 
 def test_ambiguous_slots(kb):
@@ -107,3 +107,39 @@ def test_rerunning_a_stage_refreshes_later_stages(kb, monkeypatch):
     ran.clear()
     Pipeline.run(pipe.__class__(kb, log=lambda m: None), kb.q1("SELECT * FROM lectures"))
     assert ran == []
+
+
+def test_assigning_a_clip_removes_the_empty_lecture_for_good(kb):
+    import argparse
+
+    from lectureweaver.commands import cmd_lecture_assign
+    from lectureweaver.select import Filters, select_lectures
+
+    cid = make_course(kb)
+    add_tt(kb, cid, 2, 3, 4)
+    add_rec(kb, cid, "a", "2026-10-20 10:09:00", "2026-10-20 11:50:00", 3, "G1")
+    add_rec(kb, cid, "clip", "2026-10-20 11:51:00", "2026-10-20 11:51:44", None, None)
+    build_lectures(kb, "2026-2027-1", CAL)
+    main = "2026-10-20_1234567_p3-4"
+    cmd_lecture_assign(argparse.Namespace(json=False, recording="clip", lecture=main))
+    kb.db.commit()
+    assert [r["id"] for r in kb.q("SELECT id FROM lectures")] == [main]
+    build_lectures(kb, "2026-2027-1", CAL)  # re-sync keeps the merge and the lecture's own times
+    l = kb.q1("SELECT * FROM lectures WHERE id=?", main)
+    assert [r["id"] for r in kb.q("SELECT id FROM lectures")] == [main]
+    assert (l["start_period"], l["end_time"]) == (3, "11:50")
+    assert {r["lecture_id"] for r in kb.q("SELECT lecture_id FROM recordings")} == {main}
+    assert [r["id"] for r in select_lectures(kb, Filters())] == [main]
+
+
+def test_ready_filter_lists_processed_lectures_without_notes(kb):
+    from conftest import make_lecture
+    from lectureweaver import notes as N
+    from lectureweaver.select import Filters, select_lectures
+
+    cid = make_course(kb)
+    a = make_lecture(kb, cid)
+    b = make_lecture(kb, cid, lid="2026-10-22_1234567_p1-2", date="2026-10-22")
+    assert [r["id"] for r in select_lectures(kb, Filters(ready=True))] == [a, b]
+    N.save(kb, N.get_or_create(kb, "lecture", a), "# 拷贝\n\n读完返回 -1 {t 10:10:00}\n", {})
+    assert [r["id"] for r in select_lectures(kb, Filters(ready=True))] == [b]

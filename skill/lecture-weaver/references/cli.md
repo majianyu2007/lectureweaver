@@ -19,7 +19,7 @@
   - `--whisper-bin` whisper.cpp 的 whisper-cli 路径（不在 PATH 里时）
   - `--whisper-model` whisper 模型文件（默认在 ~/.cache/whisper/ 下查找）
 - **`lw sync`** — 同步课表与课堂实录元数据（不下载视频）
-  - `--term` 学期，如 2025-2026-2（默认当前学期）
+  - `--term` 学期，如 2025-2026-2（默认当前学期；写错时会列出云课堂里可选的学期）
   - `--no-timetable` 不访问教务课表
 - **`lw courses`** — 列出课程
   - `--term` 
@@ -31,6 +31,7 @@
   - `--until` 结束日期（含）
   - `--lecture/-l` 课时 ID（可多次）
   - `--unprocessed` 只选尚未整理完成的课时
+  - `--ready` 只选素材已整理好、还没有笔记的课时（可以开始写笔记）
   - `--status` 按匹配状态筛选：matched/unscheduled/ambiguous/incomplete/manual
   - `--term` 学期，如 2026-2027-1（默认最新）
   - `--limit` 
@@ -42,6 +43,7 @@
   - `--until` 结束日期（含）
   - `--lecture/-l` 课时 ID（可多次）
   - `--unprocessed` 只选尚未整理完成的课时
+  - `--ready` 只选素材已整理好、还没有笔记的课时（可以开始写笔记）
   - `--status` 按匹配状态筛选：matched/unscheduled/ambiguous/incomplete/manual
   - `--term` 学期，如 2026-2027-1（默认最新）
   - `--limit` 
@@ -49,6 +51,7 @@
   - `--stages` 只跑这些阶段，逗号分隔
   - `--asr` 无平台转写时：auto/local（本地 whisper）、none（不识别）、或已授权的云服务名
   - `--dry-run` 只列出将处理的课时
+  - `--jobs/-j` 同时处理几个课时（默认 3；1 = 逐个处理）
 - **`lw lecture show`** — 查看课时详情、处理进度和素材
   - `<lecture>` 
 - **`lw lecture packet`** — 输出学习包路径（供 AI 整理笔记/讲解；首次使用需授权）
@@ -196,5 +199,5 @@
   - `--subject` 
   - `--note-prefs` 对这门课笔记的偏好（自然语言，会写进学习包）
 - **`lw doctor`** — 检查运行环境、登录、知识库、笔记目录与授权（AI 每次开始工作前先运行）
-- **`lw skill install`** — 把 Skill 安装到 ~/.claude/skills 与 ~/.codex/skills（优先链接，Windows 无权限时复制）
-  - `--target` 默认两者都装
+- **`lw skill install`** — 把 Skill 安装到 Claude Code / Codex / oh-my-pi 的 skills 目录（优先链接，Windows 无权限时复制）
+  - `--target` 默认 claude 和 codex

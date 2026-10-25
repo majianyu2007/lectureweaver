@@ -188,10 +188,14 @@ class Pipeline:
         return StageResult(status, detail, bytes_in)
 
     def _asr(self, r, det, work: Path):
-        from .asr import AsrError, transcribe_openai_compatible, transcribe_whisper, wav_duration, whisper_available
-        from .audio import choose_audio_source, fetch_audio_wav
-        from .platform.ylb import video_url
-        from .visual import RangeReader
+        """Speech recognition over every time slot of the recording.
+
+        A recording usually has one file per camera. Some rooms add a second
+        screen-recording file covering the *same* time (two projector inputs);
+        that is one slot. Files that follow each other in time are separate
+        slots and are all recognised, with times shifted onto one timeline.
+        """
+        from .asr import whisper_available
 
         mode = self.asr
         if mode in ("auto", "local"):
@@ -199,12 +203,28 @@ class Pipeline:
             if not ok:
                 self.log(f"  本地语音识别不可用：{why}")
                 return [], None, 0
-        cands = [(name, (det.get(key) or [None])[0]) for name, key in (("teacher", "teacherViewFiles"), ("student", "studentViewFiles"), ("vga", "vgaViewFiles"))]
-        cands = [(n, f) for n, f in cands if f]
-        if not cands:
+        slots = audio_slots(det)
+        if not slots:
             return [], None, 0
-        if any(len(det.get(k) or []) > 1 for k in ("teacherViewFiles", "vgaViewFiles")):
-            self.log("  提示：该录像被拆成多个文件，仅识别第一段")
+        rec_start = _start_dt(r, det)
+        if len(slots) > 1:
+            self.log(f"  该录像按时间分成 {len(slots)} 个文件，逐个识别")
+        segs, src, total = [], None, 0
+        for slot_start, cands in slots:
+            got, s_src, b = self._asr_files(r, cands, work)
+            total += b
+            off = (slot_start - rec_start).total_seconds() if (slot_start and rec_start) else 0.0
+            segs += [{**x, "t0": x["t0"] + off, "t1": x["t1"] + off} for x in got]
+            src = src or s_src
+        return segs, src, total
+
+    def _asr_files(self, r, cands, work: Path):
+        from .asr import AsrError, transcribe_openai_compatible, wav_duration
+        from .audio import choose_audio_source, fetch_audio_wav
+        from .platform.ylb import video_url
+        from .visual import RangeReader
+
+        mode = self.asr
         readers = [RangeReader(video_url(f)) for _n, f in cands]
         work.mkdir(parents=True, exist_ok=True)
         try:
@@ -230,9 +250,8 @@ class Pipeline:
                     stream_audio_full(px.local(video_url(cands[0][1])), wav)
                     extra = px.meter.bytes
                 readers[0].bytes += extra
-            self.log(f"  语音识别中（{wav_duration(wav) / 60:.0f} 分钟音频）…")
             if mode in ("auto", "local"):
-                segs, model = transcribe_whisper(wav)
+                segs, model = self._local_asr(wav)
                 src = {"kind": "asr", "model": model}
             else:
                 from .consent import require
@@ -243,6 +262,7 @@ class Pipeline:
                 key = get_secret(f"apikey:{mode}")
                 if not key:
                     raise AsrError(f"未配置 {mode} 的 API Key（lw provider set-key {mode}）")
+                self.log(f"  云端语音识别中（{wav_duration(wav) / 60:.0f} 分钟音频）…")
                 segs, model = transcribe_openai_compatible(wav, prov, key)
                 self.kb.x("INSERT INTO usage(service,ts,units,unit,note) VALUES(?,?,?,?,?)", f"asr:{mode}", time.time(), wav_duration(wav) / 60, "min", r["id"])
                 self.kb.db.commit()
@@ -251,6 +271,25 @@ class Pipeline:
         finally:
             for x in readers:
                 x.close()
+
+    def _local_asr(self, wav: Path):
+        """whisper.cpp uses every CPU core: with several lectures processed at
+        once, recognise one at a time (machine-wide lock) and let the others
+        keep downloading screenshots meanwhile."""
+        from .asr import transcribe_whisper, wav_duration
+        from .config import state_dir
+        from .kb import try_lock
+
+        path = state_dir() / "locks" / "local-asr.lock"
+        lock = try_lock(path)
+        if lock is None:
+            self.log("  等待另一个课时的本地语音识别结束…")
+            lock = try_lock(path, wait=True)
+        try:
+            self.log(f"  语音识别中（{wav_duration(wav) / 60:.0f} 分钟音频）…")
+            return transcribe_whisper(wav)
+        finally:
+            lock.close()
 
     # ------------------------------------------------------------------ visual
     def stage_visual(self, lec, work: Path) -> StageResult:
@@ -438,6 +477,29 @@ def _clock(start: datetime | None, t: float) -> str:
         s = int(t)
         return f"+{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
     return (start + timedelta(seconds=float(t))).strftime("%H:%M:%S")
+
+
+def audio_slots(det: dict, tol_s: float = 60.0) -> list[tuple[datetime | None, list[tuple[str, dict]]]]:
+    """Group a recording's files into time slots: [(slot start, [(stream, file)])].
+
+    Files of different cameras starting within ``tol_s`` of each other cover
+    the same time; within one stream only the first file of a slot is used.
+    """
+    files = []
+    for name, key in (("teacher", "teacherViewFiles"), ("student", "studentViewFiles"), ("vga", "vgaViewFiles")):
+        for f in det.get(key) or []:
+            files.append((_parse_dt(f.get("startTime")), name, f))
+    files.sort(key=lambda x: (x[0] is None, x[0] or datetime.min))
+    slots: list[tuple[datetime | None, list[tuple[str, dict]]]] = []
+    for start, name, f in files:
+        cur = slots[-1] if slots else None
+        same = cur is not None and (start is None or cur[0] is None or abs((start - cur[0]).total_seconds()) <= tol_s)
+        if not same:
+            slots.append((start, []))
+            cur = slots[-1]
+        if name not in {n for n, _ in cur[1]}:
+            cur[1].append((name, f))
+    return slots
 
 
 def cleanup_tmp() -> int:

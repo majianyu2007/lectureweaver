@@ -19,6 +19,7 @@ from __future__ import annotations
 import http.server
 import json
 import os
+import re
 import shutil
 import socketserver
 import subprocess
@@ -80,27 +81,44 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             headers["Range"] = self.headers["Range"]
         meter = self.server.meter
         meter.request()
-        try:
-            with self.server.client.stream("HEAD" if head else "GET", url, headers=headers) as r:
-                self.send_response(r.status_code)
-                for h in ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Last-Modified", "ETag"):
-                    if h in r.headers:
-                        self.send_header(h, r.headers[h])
-                self.end_headers()
-                if head:
-                    return
-                for chunk in r.iter_raw(64 * 1024):
-                    meter.add(len(chunk))
-                    try:
-                        self.wfile.write(chunk)
-                    except (BrokenPipeError, ConnectionResetError):
-                        # ffmpeg seeks by dropping the connection; stop pulling.
-                        return
-        except httpx.HTTPError:
+        m = re.fullmatch(r"bytes=(\d+)-(\d*)", headers.get("Range", ""))
+        pos, end = (int(m.group(1)), m.group(2)) if m else (0, "")
+        sent_headers = False
+        for attempt in range(4):
+            if sent_headers:
+                # Upstream broke off mid-body: continue where it stopped, so a
+                # long sequential read survives a dropped connection.
+                headers["Range"] = f"bytes={pos}-{end}"
+                time.sleep(2 ** attempt)
             try:
-                self.send_error(502)
-            except Exception:  # noqa: BLE001
-                pass
+                with self.server.client.stream("HEAD" if head else "GET", url, headers=headers) as r:
+                    if not sent_headers:
+                        self.send_response(r.status_code)
+                        for h in ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Last-Modified", "ETag"):
+                            if h in r.headers:
+                                self.send_header(h, r.headers[h])
+                        self.end_headers()
+                        sent_headers = True
+                        if head:
+                            return
+                    elif r.status_code != 206:
+                        return
+                    for chunk in r.iter_raw(64 * 1024):
+                        meter.add(len(chunk))
+                        pos += len(chunk)
+                        try:
+                            self.wfile.write(chunk)
+                        except (BrokenPipeError, ConnectionResetError):
+                            # ffmpeg seeks by dropping the connection; stop pulling.
+                            return
+                    return
+            except httpx.HTTPError:
+                if not sent_headers:
+                    try:
+                        self.send_error(502)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return
 
 
 class _Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
