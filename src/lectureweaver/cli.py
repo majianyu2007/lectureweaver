@@ -64,13 +64,15 @@ def main(argv: list[str] | None = None) -> int:
     if fn is None:
         parser.print_help()
         return 0
+    from nwafu_cas import CasError
+
     from .platform.cas import AuthError
     from .prompt import PromptUnavailable
 
     try:
         rv = fn(args)
         return int(rv) if isinstance(rv, int) else 0
-    except AuthError as e:
+    except (AuthError, CasError) as e:
         print(f"登录问题：{e}", file=sys.stderr)
         if getattr(args, "json", False):
             print(json.dumps({"error": "auth", "kind": e.kind, "message": str(e)}, ensure_ascii=False))

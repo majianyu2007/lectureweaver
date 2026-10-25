@@ -15,9 +15,12 @@ import time
 import uuid
 
 
+import nwafu_cas
+from nwafu_cas import interactive
+
 from .config import MachineConfig
 from .platform import cas as cas_mod
-from .platform.cas import AuthError, CasClient, LoginRequired
+from .platform.cas import AuthError, CasClient, LoginRequired, PrompterUi, convert
 from .platform.ehall import EhallTimetable
 from .platform.ylb import SSO_SERVICE, YlbClient, YlbToken, token_from_json, token_to_json
 from .prompt import Prompter
@@ -33,11 +36,11 @@ class Session:
         self.cfg = cfg or MachineConfig.load()
         self.store = SessionStore()
         data = self.store.load()
-        self.http = cas_mod.new_client(cas_mod.cookies_from_json(data.get("cookies", [])))
-        self.cas = CasClient(self.http)
-        self.ylb_token: YlbToken | None = token_from_json(data.get("ylb"))
-        # Stable per-install browser fingerprint; see CasClient.ensure_fingerprint.
+        # Stable per-install browser fingerprint; 信任此设备 is stored against it.
         self.fingerprint: str = data.get("fingerprint") or uuid.uuid4().hex.upper()
+        self.cas = CasClient(cas_mod.cookies_from_json(data.get("cookies", [])), fingerprint=self.fingerprint)
+        self.http = self.cas.http
+        self.ylb_token: YlbToken | None = token_from_json(data.get("ylb"))
         self._ylb: YlbClient | None = None
         self._ehall: EhallTimetable | None = None
 
@@ -60,29 +63,44 @@ class Session:
     # ---------------------------------------------------------------- login
     def interactive_login(
         self,
-        username: str,
+        username: str | None,
         password: str | None,
         prompter: Prompter,
         save_password: bool = True,
         totp_secret: str | None = None,
+        qr: bool = False,
     ) -> YlbToken:
-        if password is None:
-            password = get_secret(password_account(username)) or prompter.ask(f"统一身份认证密码（{username}）", secret=True)
-        self.cas.ensure_fingerprint(self.fingerprint)
-        if save_password:
-            self.cas.on_password_ok = lambda: set_secret(password_account(username), password)
-        self.cfg.username = username
-        self.cfg.save()
+        """Log in (password, or 扫码 with the university app) plus any second factor.
+
+        Every second-factor method the school offers is handled by nwafu-cas;
+        the user picks one in the prompter's dialogs.
+        """
+        ui = PrompterUi(prompter)
+        self.cas.ensure_fingerprint()
         try:
-            last = self.cas.login(SSO_SERVICE, username, password, prompter=prompter, totp_secret=totp_secret)
+            if qr:
+                save_password = False
+                last = interactive.login_qr(self.cas, ui, service=SSO_SERVICE, totp_secret=totp_secret)
+            else:
+                assert username
+                if password is None:
+                    password = get_secret(password_account(username)) or prompter.ask(f"统一身份认证密码（{username}）", secret=True)
+                if save_password:
+                    self.cas.on_first_factor_ok = lambda: set_secret(password_account(username), password)
+                self.cfg.username = username
+                self.cfg.save()
+                last = interactive.login(self.cas, username, password, ui, service=SSO_SERVICE, totp_secret=totp_secret)
+        except nwafu_cas.CasError as e:
+            raise convert(e) from e
         finally:
-            self.cas.on_password_ok = None
+            self.cas.on_first_factor_ok = None
             self.save()
         token = YlbClient.token_from_service_response(self.http, last)
         self.ylb_token = token
-        self.cfg.username = username
-        self.cfg.save()
-        if save_password:
+        if username:
+            self.cfg.username = username
+            self.cfg.save()
+        if save_password and username and password:
             set_secret(password_account(username), password)
         self._ylb = None
         self.save()
@@ -95,9 +113,13 @@ class Session:
             pw = get_secret(password_account(self.cfg.username)) if self.cfg.username else None
             if not pw:
                 raise
-            self.cas.ensure_fingerprint(self.fingerprint)
-            # No prompter: if MFA is demanded this raises LoginRequired("mfa").
-            last = self.cas.login(SSO_SERVICE, self.cfg.username, pw, prompter=None)
+            try:
+                res = self.cas.login(self.cfg.username, pw, service=SSO_SERVICE)
+            except nwafu_cas.CasError as e:
+                raise convert(e) from e
+            if not res.done:
+                raise LoginRequired("学校要求二次认证", "运行 lw auth login 完成验证", "mfa")
+            last = res.response
         token = YlbClient.token_from_service_response(self.http, last)
         self.ylb_token = token
         self.save()

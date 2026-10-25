@@ -34,6 +34,7 @@ def spec_auth(sub):
     p.add_argument("--username", "-u", help="学号")
     p.add_argument("--gui", action="store_true", help="用系统对话框输入密码/验证码（AI 代为启动时使用；macOS/Windows/Linux 桌面均可）")
     p.add_argument("--no-save-password", action="store_true", help="不保存密码（之后会话过期需重新登录）")
+    p.add_argument("--qr", action="store_true", help="用学校 App 扫码登录，不输入密码（不保存密码，会话过期后需再次扫码）")
     _add(g, "status", cmd_auth_status, "查看会话状态（不显示任何凭据）")
     p = _add(g, "logout", cmd_auth_logout, "退出登录并清除会话 Cookie")
     p.add_argument("--forget-password", action="store_true", help="同时删除保存的密码")
@@ -46,12 +47,12 @@ def cmd_auth_login(args):
 
     cfg = MachineConfig.load()
     prompter = default_prompter(gui=True if args.gui else None)
-    username = args.username or cfg.username or prompter.ask("学号")
-    if not username:
+    username = None if args.qr else (args.username or cfg.username or prompter.ask("学号"))
+    if not args.qr and not username:
         raise UserError("需要学号")
     s = Session(cfg)
     try:
-        token = s.interactive_login(username, None, prompter, save_password=not args.no_save_password)
+        token = s.interactive_login(username, None, prompter, save_password=not args.no_save_password, qr=args.qr)
         user = s.ylb().user_resource()
         name = (user or {}).get("userName", "")
         s.ylb_token.user = {"userName": name, "userNo": (user or {}).get("userNo", "")}
@@ -1308,6 +1309,9 @@ def cmd_doctor(args):
     from .secrets import backend_name
 
     add("学号与密码", bool(cfg.username and get_secret(password_account(cfg.username))), f"{cfg.username or '未登录'}（密码存放：{backend_name()}）", "lw auth login --gui")
+    import nwafu_cas
+
+    add("统一身份认证库", True, f"nwafu-cas {nwafu_cas.__version__}（学校页面是否改版：nwafu-cas doctor）", "")
     from .secrets import SessionStore
 
     has_session = bool(SessionStore().load().get("ylb"))

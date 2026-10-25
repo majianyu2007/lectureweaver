@@ -4,9 +4,9 @@
 
 ## 统一身份认证（authserver.nwafu.edu.cn，金智 AuthServer）
 
-- 登录流程与 `wisedu_cas`、`nwafu-bksxk/lib/data/cas_client.dart` 一致：`GET /authserver/login?service=<S>`（302 = CASTGC 仍有效）→ 表单 `pwdEncryptSalt` + `execution` → AES-CBC 加密密码 → 跟随重定向。
+- 登录由 [nwafu-cas](https://github.com/majianyu2007/nwafu-cas) 实现（原 wisedu_cas，协议细节与二次认证各方式的接口见该项目；`nwafu-cas doctor` 可检查页面是否改版）。基本流程与 `nwafu-bksxk/lib/data/cas_client.dart` 一致：`GET /authserver/login?service=<S>`（302 = CASTGC 仍有效）→ 表单 `pwdEncryptSalt` + `execution` → AES-CBC 加密密码 → 跟随重定向。
 - `checkNeedCaptcha.htl` 对不存在的学号也返回 `isNeed:true`；页面 `captchaSwitch="2"`（滑块）。真实账号正常登录时不需要。
-- **二次验证页面 2026 年秋改版**：方式列在 `<div class="reauth-tab-item" data-type="3">`（Tab）和 `<a class="reauth-tab-more-item" id="10">`（“更多”下拉）中；旧版 `changeReAuthTypes` 也兼容。默认 Tab 是 8（微信扫码，无法无头完成）。可用：3 短信、4 企业微信、10 TOTP。接口未变：`changeReAuthType.do`、`dynamicCode/getDynamicCodeByReauth.do`、`reAuthSubmit.do`（`skipTmpReAuth=true` = 信任此设备）。
+- **二次验证页面 2026 年秋改版**：方式列在 `reauth-tab-item`（Tab，`data-type`）和 `reauth-tab-more-item`（“更多”下拉，`id`）中。每个账号可用的方式不同；服务器支持：2 认证密码、3 短信、4 企业微信、5 今日校园、6/18/20 实人认证、7 安全问题（现改走密码）、8 微信扫码、9 QQ 扫码、10 安全令牌 OTP（以 `otpCode` 提交）、11 邮箱、12 钉钉、13 WeLink、14 钉钉/企微/WeLink 扫码、15 公众号、CA UKey。除 QQ 扫码和 UKey 外 nwafu-cas 都能完成。提交 `reAuthSubmit.do`，`skipTmpReAuth=true` = 信任此设备。“记住我”现为 7 天。
 - “信任此设备”绑定浏览器指纹：页面 JS 计算 md5(浏览器特征) 后 `GET /authserver/bfp/info?bfp=<FP>`，服务器设置 `MULTIFACTOR_BROWSER_FINGERPRINT`（30 天）。本工具为每个安装生成固定指纹并在登录前注册。
 - `CASTGC` 有效期约 14 天（rememberMe=true）。
 

@@ -6,6 +6,7 @@
   - `--username/-u` 学号
   - `--gui` 用系统对话框输入密码/验证码（AI 代为启动时使用；macOS/Windows/Linux 桌面均可）
   - `--no-save-password` 不保存密码（之后会话过期需重新登录）
+  - `--qr` 用学校 App 扫码登录，不输入密码（不保存密码，会话过期后需再次扫码）
 - **`lw auth status`** — 查看会话状态（不显示任何凭据）
 - **`lw auth logout`** — 退出登录并清除会话 Cookie
   - `--forget-password` 同时删除保存的密码

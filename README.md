@@ -35,12 +35,23 @@ curl -LO https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5
 
 lw init --notes "<你的 Obsidian Vault>/课程笔记"
 # whisper-cli / ffmpeg 不在 PATH 里时：lw init --whisper-bin <路径> --ffmpeg <路径>
-lw auth login --gui     # 弹出系统对话框输入学号、密码、二次验证码（无桌面时用 lw auth login 在终端输入）
+lw auth login --gui     # 弹出系统对话框输入学号、密码；学校要求二次认证时选择方式（无桌面时用 lw auth login 在终端输入）
+# 或 lw auth login --qr   # 用学校 App 扫码登录，不输入密码
 lw skill install        # 安装 Skill 到 ~/.claude/skills 和 ~/.codex/skills（Windows 无链接权限时复制）
 lw doctor               # 检查各项是否就绪
 ```
 
 本机状态（会话 Cookie、临时文件、本机路径设置）在 macOS `~/Library/Application Support/LectureWeaver`、Linux `~/.local/state/lectureweaver`、Windows `%LOCALAPPDATA%\LectureWeaver`。密码和会话都不进入知识库、笔记、日志或备份。
+
+### 登录与二次认证
+
+统一身份认证由 [nwafu-cas](https://github.com/majianyu2007/nwafu-cas) 完成，学校页面提供的二次认证方式都能用：
+
+- 短信、企业微信、今日校园、邮箱、钉钉、WeLink、公众号验证码；
+- 安全令牌 OTP、认证密码；
+- 微信扫码、钉钉/企微/WeLink 扫码、实人认证。扫码类会在图片查看器中打开二维码。
+
+完成二次认证后默认勾选“信任此设备”，之后一段时间内会话过期时，程序可以用保存的密码自动重新登录。学校仍要求二次认证时，需要再运行一次 `lw auth login`。
 
 ## 使用
 

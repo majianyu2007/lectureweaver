@@ -1,47 +1,48 @@
-from lectureweaver.platform.cas import encrypt_password, input_value, parse_mfa_methods, classify_login_failure
+"""The CAS protocol itself is tested in nwafu-cas; here only the adapter."""
 
-# Structure of reAuthLoginView.do as served on 2026-10-22 (personal data removed).
-MFA_TABS_2026 = """
-<div class="reauth-tab-item reauth-tab-active" id="tab_8" onclick="handlePcTabClick(this)" data-type="8" data-name="微信扫码">
-<div class="reauth-tab-item" id="tab_3" onclick="handlePcTabClick(this)" data-type="3" data-name="短信验证码">
-<div class="reauth-tab-more-dropdown" id="moreDropdown" style="display: none;">
-<a class="reauth-tab-more-item" href="javascript:;" id="10" title="安全令牌OTP" onclick="handleMoreItemClick(this)" data-name="安全令牌OTP">安全令牌OTP</a>
-<a class="reauth-tab-more-item" href="javascript:;" id="4" title="企业微信验证码" onclick="handleMoreItemClick(this)" data-name="企业微信验证码">企业微信验证码</a>
-"""
+import nwafu_cas
+import pytest
 
-MFA_LEGACY = '<li class="changeReAuthTypes x" id="3">短信</li><li class="changeReAuthTypes" id="10">OTP</li>'
+from lectureweaver.platform.cas import AuthError, LoginRequired, PrompterUi, convert, cookies_from_json, cookies_to_json, has_trusted_device
 
 
-def test_parse_mfa_tabs_2026():
-    # 8 (WeChat scan) cannot be done headless and is skipped.
-    assert parse_mfa_methods(MFA_TABS_2026) == ["3", "10", "4"]
+def test_errors_become_lectureweaver_errors_with_hints():
+    e = convert(nwafu_cas.InvalidCredentials("您提供的用户名或者密码有误", "检查密码"))
+    assert isinstance(e, AuthError) and e.kind == "password" and "检查密码" in str(e)
+    e = convert(nwafu_cas.LoginRequired("统一身份认证未登录或已失效"))
+    assert isinstance(e, LoginRequired) and "lw auth login" in str(e)
+    e = convert(nwafu_cas.SiteChanged("登录页无法识别"))
+    assert "nwafu-cas" in str(e) and e.kind == "schema"
 
 
-def test_parse_mfa_legacy():
-    assert parse_mfa_methods(MFA_LEGACY) == ["3", "10"]
+def test_cookie_roundtrip_keeps_trusted_device():
+    jar = cookies_from_json([
+        {"name": "MULTIFACTOR_BROWSER_FINGERPRINT", "value": "F", "domain": "authserver.nwafu.edu.cn", "path": "/authserver", "expires": None},
+        {"name": "CASTGC", "value": "TGT", "domain": "authserver.nwafu.edu.cn", "path": "/authserver", "expires": 1},  # expired
+    ])
+    assert has_trusted_device(jar)
+    assert [c["name"] for c in cookies_to_json(jar)] == ["MULTIFACTOR_BROWSER_FINGERPRINT"]
 
 
-def test_input_value_by_id_or_name():
-    html = '<input type="hidden" id="pwdEncryptSalt" value="Qa7WVrgbwxN0haVr" /><input type="hidden" name="execution" value="e1s1"/>'
-    assert input_value(html, "pwdEncryptSalt") == "Qa7WVrgbwxN0haVr"
-    assert input_value(html, "execution") == "e1s1"
+def test_prompter_ui_saves_and_announces_qr(monkeypatch, isolated_env):
+    from lectureweaver.platform import cas
+
+    opened, said = [], []
+    monkeypatch.setattr(cas, "_open", opened.append)
+
+    class P:
+        def info(self, m):
+            said.append(m)
+
+    q = nwafu_cas.QrChallenge("mfa", b"\x89PNG\r\n\x1a\n...", "用钉钉、企业微信或 WeLink 扫码并确认")
+    PrompterUi(P()).show_qr(q)
+    assert opened and opened[0].read_bytes().startswith(b"\x89PNG") and "钉钉" in said[0]
 
 
-def test_encrypt_password_roundtrip():
-    import base64
-    from Crypto.Cipher import AES
-    from Crypto.Util.Padding import unpad
+@pytest.mark.parametrize("secret", [False, True])
+def test_prompter_ui_ask_passes_secret(secret):
+    class P:
+        def ask(self, m, secret=False, default=""):
+            return f" {m}:{secret} "
 
-    salt = "Qa7WVrgbwxN0haVr"
-    enc = encrypt_password("p@ss中文", salt)
-    raw = base64.b64decode(enc)
-    # The IV is random and not transmitted; the server ignores the first block
-    # because the plaintext starts with 64 random chars. Decrypt with any IV
-    # and check the tail.
-    plain = AES.new(salt.encode(), AES.MODE_CBC, b"0" * 16).decrypt(raw)
-    assert unpad(plain, 16)[64:].decode() == "p@ss中文"
-
-
-def test_classify_failure():
-    e = classify_login_failure('<span id="showErrorTip">您提供的用户名或者密码有误</span>')
-    assert e.kind == "password"
+    assert PrompterUi(P()).ask("请输入短信验证码", secret=secret) == f"请输入短信验证码:{secret}"
