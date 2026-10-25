@@ -34,7 +34,7 @@ def spec_auth(sub):
     p.add_argument("--username", "-u", help="学号")
     p.add_argument("--gui", action="store_true", help="用系统对话框输入密码/验证码（AI 代为启动时使用；macOS/Windows/Linux 桌面均可）")
     p.add_argument("--no-save-password", action="store_true", help="不保存密码（之后会话过期需重新登录）")
-    p.add_argument("--qr", action="store_true", help="用学校 App 扫码登录，不输入密码（不保存密码，会话过期后需再次扫码）")
+    p.add_argument("--qr", action="store_true", help="用微信或企业微信扫码登录，不输入密码（手机上需已登录统一身份认证；不保存密码，会话过期后需再次扫码）")
     _add(g, "status", cmd_auth_status, "查看会话状态（不显示任何凭据）")
     p = _add(g, "logout", cmd_auth_logout, "退出登录并清除会话 Cookie")
     p.add_argument("--forget-password", action="store_true", help="同时删除保存的密码")

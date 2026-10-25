@@ -70,7 +70,7 @@ class Session:
         totp_secret: str | None = None,
         qr: bool = False,
     ) -> YlbToken:
-        """Log in (password, or 扫码 with the university app) plus any second factor.
+        """Log in (password, or 扫码 with 微信/企业微信) plus any second factor.
 
         Every second-factor method the school offers is handled by nwafu-cas;
         the user picks one in the prompter's dialogs.

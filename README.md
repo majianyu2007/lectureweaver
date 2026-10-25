@@ -36,7 +36,7 @@ curl -LO https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5
 lw init --notes "<你的 Obsidian Vault>/课程笔记"
 # whisper-cli / ffmpeg 不在 PATH 里时：lw init --whisper-bin <路径> --ffmpeg <路径>
 lw auth login --gui     # 弹出系统对话框输入学号、密码；学校要求二次认证时选择方式（无桌面时用 lw auth login 在终端输入）
-# 或 lw auth login --qr   # 用学校 App 扫码登录，不输入密码
+# 或 lw auth login --qr   # 用微信或企业微信扫码登录，不输入密码
 lw skill install        # 安装 Skill 到 ~/.claude/skills 和 ~/.codex/skills（Windows 无链接权限时复制）
 lw doctor               # 检查各项是否就绪
 ```
