@@ -37,7 +37,7 @@ def sha256_file(p: Path) -> str:
     return h.hexdigest()
 
 
-def extract(path: Path) -> tuple[str, list[tuple[str, str]], str]:
+def extract(path: Path, force_ocr: bool = False) -> tuple[str, list[tuple[str, str]], str]:
     """Return (kind, [(unit label, text)], warning)."""
     ext = path.suffix.lower()
     if ext == ".pdf":
@@ -46,9 +46,11 @@ def extract(path: Path) -> tuple[str, list[tuple[str, str]], str]:
         rd = PdfReader(str(path))
         units = [(f"p.{i}", (pg.extract_text() or "").strip()) for i, pg in enumerate(rd.pages, 1)]
         empty = sum(1 for _, t in units if len(t) < 20)
+        garbled = sum(1 for _, t in units if len(t) >= 20 and is_garbled(t))
         warn = ""
-        if units and empty / len(units) > 0.6:
-            units, warn = _ocr_pdf(path, units)
+        if units and (force_ocr or (empty + garbled) / len(units) > 0.6):
+            why = "按要求 OCR" if force_ocr else "PDF 文字层是乱码（字体自定义编码）" if garbled > empty else "扫描版 PDF"
+            units, warn = _ocr_pdf(path, units, why)
         return "pdf", units, warn
     if ext in (".pptx",):
         from pptx import Presentation
@@ -101,20 +103,36 @@ def _level(style: str) -> int:
     return min(int(m.group(1)), 4) + 1 if m else 2
 
 
-def _ocr_pdf(path: Path, units):
-    """Scanned PDF: render pages with PDFKit and OCR them locally (no upload)."""
+# Glyphs a PDF font with a private encoding (common in Beamer/LaTeX slides
+# with CJK) yields instead of real characters: spacing accents, ligatures,
+# currency signs. Real Chinese/English text almost never contains them.
+_GARBLE = re.compile(r"[ˆ-˝ﬀ-ﬆ¡¢¤¥¦¨ª¬¯´¸º¿‰„‚ıŁłŒœÚÙÛÞþÐð]")
+_CJK = re.compile(r"[㐀-鿿]")
+
+
+def is_garbled(text: str) -> bool:
+    """True when extracted text is mojibake from a custom-encoded font."""
+    s = re.sub(r"\s", "", text)
+    if not s:
+        return False
+    return len(_GARBLE.findall(s)) / len(s) >= 0.03 and len(_CJK.findall(s)) / len(s) < 0.05
+
+
+def _ocr_pdf(path: Path, units, why: str = "扫描版 PDF"):
+    """Unreadable PDF (scanned or garbled text layer): render the pages and
+    OCR them locally (no upload)."""
     from .ocr import OcrUnavailable, lines_text, ocr_pdf
 
     try:
         pages = ocr_pdf(path)
     except (OcrUnavailable, OSError) as e:
-        return units, f"扫描版 PDF，未能提取文字：{e}"
+        return units, f"{why}，未能提取文字：{e}"
     if not pages:
-        return units, "扫描版 PDF，未能提取文字"
-    return [(f"p.{i}", lines_text(p)) for i, p in enumerate(pages, 1)], "扫描版 PDF，文字来自本地 OCR（可能有识别错误）"
+        return units, f"{why}，未能提取文字"
+    return [(f"p.{i}", lines_text(p)) for i, p in enumerate(pages, 1)], f"{why}，文字来自本地 OCR（可能有识别错误）"
 
 
-def import_file(kb: KB, src: Path, title: str | None = None, note: str | None = None) -> tuple[dict, bool, str]:
+def import_file(kb: KB, src: Path, title: str | None = None, note: str | None = None, force_ocr: bool = False) -> tuple[dict, bool, str]:
     src = Path(src).expanduser().resolve()
     if not src.is_file():
         raise MaterialError(f"文件不存在：{src}")
@@ -122,24 +140,13 @@ def import_file(kb: KB, src: Path, title: str | None = None, note: str | None = 
     existing = kb.q1("SELECT * FROM materials WHERE sha256=?", digest)
     if existing:
         return dict(existing), False, ""
-    kind, units, warn = extract(src)
+    kind, units, warn = extract(src, force_ocr=force_ocr)
     mid = f"m_{digest[:12]}"
     d = kb.abs(f"materials/{mid}")
     d.mkdir(parents=True, exist_ok=True)
     dst = d / src.name
     shutil.copy2(src, dst)
-    lines = [f"# {title or src.stem}", "", f"> 资料原文件：{src.name}（导入于 {time.strftime('%Y-%m-%d')}）。以下为提取的文字，图片/公式可能缺失。", ""]
-    for label, text in units:
-        lines.append(f"## {label}")
-        lines.append("")
-        if kind == "code":
-            lines.append(f"```{CODE_EXT.get(src.suffix.lower(), '')}")
-            lines.append(text)
-            lines.append("```")
-        else:
-            lines.append(text or "（本页无可提取文字）")
-        lines.append("")
-    (d / "content.md").write_text("\n".join(lines), "utf-8")
+    _write_content(d / "content.md", title or src.stem, src.name, kind, units, src.suffix.lower())
     kb.x(
         "INSERT INTO materials(id,sha256,filename,kind,title,path,text_path,units,imported_at,note) VALUES(?,?,?,?,?,?,?,?,?,?)",
         mid, digest, src.name, kind, title or src.stem, f"materials/{mid}/{src.name}", f"materials/{mid}/content.md", len(units), time.time(), note,
@@ -147,6 +154,40 @@ def import_file(kb: KB, src: Path, title: str | None = None, note: str | None = 
     kb.db.commit()
     kb.index_replace("material", mid, [(f"[{label}] {text}", None, None, None) for label, text in units])
     return dict(kb.q1("SELECT * FROM materials WHERE id=?", mid)), True, warn
+
+
+def refresh(kb: KB, mid: str, force_ocr: bool = False) -> tuple[dict, str]:
+    """Extract the text of an imported material again (newer extraction,
+    or OCR forced for a PDF whose text layer is wrong)."""
+    m = kb.q1("SELECT * FROM materials WHERE id=?", mid)
+    if not m:
+        raise MaterialError(f"资料 {mid} 不存在")
+    src = kb.abs(m["path"])
+    kind, units, warn = extract(src, force_ocr=force_ocr)
+    _write_content(kb.abs(m["text_path"]), m["title"] or src.stem, m["filename"], kind, units, src.suffix.lower())
+    kb.x("UPDATE materials SET kind=?, units=? WHERE id=?", kind, len(units), mid)
+    kb.db.commit()
+    kb.index_replace("material", mid, [(f"[{label}] {text}", None, None, None) for label, text in units])
+    course = kb.q1("SELECT target_id FROM material_links WHERE material_id=? AND target_type='course'", mid)
+    if course:
+        kb.x("UPDATE search SET course_id=? WHERE kind='material' AND ref=?", course["target_id"], mid)
+        kb.db.commit()
+    return dict(kb.q1("SELECT * FROM materials WHERE id=?", mid)), warn
+
+
+def _write_content(dest: Path, title: str, filename: str, kind: str, units, ext: str) -> None:
+    lines = [f"# {title}", "", f"> 资料原文件：{filename}（提取于 {time.strftime('%Y-%m-%d')}）。以下为提取的文字，图片/公式可能缺失。", ""]
+    for label, text in units:
+        lines.append(f"## {label}")
+        lines.append("")
+        if kind == "code":
+            lines.append(f"```{CODE_EXT.get(ext, '')}")
+            lines.append(text)
+            lines.append("```")
+        else:
+            lines.append(text or "（本页无可提取文字）")
+        lines.append("")
+    dest.write_text("\n".join(lines), "utf-8")
 
 
 def link(kb: KB, mid: str, target_type: str, target_id: str, role: str | None, note: str | None = None) -> None:
@@ -252,4 +293,4 @@ def material_text(kb: KB, mid: str, units: str | None = None) -> str:
     return "\n".join(out)
 
 
-__all__ = ["import_file", "link", "unlink", "suggest_lectures", "material_text", "MaterialError", "ROLES", "dumps"]
+__all__ = ["import_file", "refresh", "is_garbled", "link", "unlink", "suggest_lectures", "material_text", "MaterialError", "ROLES", "dumps"]

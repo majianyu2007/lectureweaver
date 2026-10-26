@@ -22,7 +22,7 @@ from .sync import lecture_label
 SUBJECT_FOCUS = {
     "programming": "以录屏为准记录关键代码（逐字核对截图，看不清的地方标注“看不清”而不是猜）；记录操作步骤、运行结果、报错及原因、类/接口之间的关系；说明“为什么这样写”。",
     "programming_lab": "记录实验要求与操作步骤、关键代码与配置、遇到的错误与解决办法；区分老师演示过的与实验还要求自己完成的。",
-    "math": "写清定义、成立条件、定理/公式、推导步骤与例题解法；公式只写能从截图/板书确认的，口述的公式要注明来自口述；标出老师强调的易错点。",
+    "math": "写清定义、成立条件、定理/公式、推导步骤与例题解法；定义、定理和条件照幻灯片/板书写（口头讲解常把条件说强或说反，如把充分条件说成“必须”），只有口述的公式注明来自口述；例题数值自己复算一遍；标出老师强调的易错点。",
     "humanities": "梳理论点结构与概念辨析，保留老师举的例子；标出老师明确说“会考/重点/问答题”的内容。",
     "language": "整理词汇短语、句型、课文要点、练习与答案、老师纠正的常见错误。",
     "lab": "记录实验目的、原理、步骤、注意事项与数据处理方法。",
@@ -35,6 +35,8 @@ MARKUP = """\
 - `{f F012}` 插入截图 F012（只能用本 packet 列出的截图 ID）
 - `{m <资料ID> p.3}` 引用资料及页码/幻灯片号
 - 课堂内容写在正文；资料内容放 `> [!quote] 资料：…`；AI 补充解释/类比/例题放 `> [!tip] AI 补充`
+- 内容要对：定义、定理、公式、代码以屏幕上的幻灯片/板书/代码为准（见“截图文字”），口头说法和屏幕不一致时按屏幕写；
+  例题数值复算，代码能运行就运行；拿不准的写“（待核实）”。资料只用来核对和补全本课讲过的内容，课上没讲的不写进本课时笔记
 - 转写有同音错字：可按上下文纠正明显错误；不确定的写“（转写不清）”，不要编造老师的话
 - 读者可能不看录像：课上讲的每段内容（例题完整解法、逐步演示、幻灯片和代码、易错点、作业）都要写进笔记
 - 写给人复习用：直接写知识本身（定义、结论、步骤、代码、例题），不要写“老师用……说明……”式的转述，
@@ -110,7 +112,7 @@ def build_packet(kb: KB, lec) -> tuple[Path, dict]:
         lec["id"], lec["course_id"],
     )
     L.append("")
-    L.append("## 关联资料（资料内容不是课堂讲授内容）")
+    L.append("## 关联资料（资料内容不是课堂讲授内容：只用来核对和补全本课讲过的部分，课上没讲的不写进本课时笔记）")
     by_id: dict = {}
     for m in mats:  # a material linked to both the course and this lecture is listed once
         if m["id"] not in by_id or m["target_type"] == "lecture":
@@ -166,7 +168,9 @@ def build_packet(kb: KB, lec) -> tuple[Path, dict]:
             L.append(f"[{p['clock']}] {p['text']}")
         else:
             ocr = clean_ocr_lines(frame_text(p))
-            head = " / ".join(ocr[:3])[:120]
+            # slides: the first lines are deck/chapter titles; show enough to
+            # reach the statement on the slide, next to what was said about it
+            head = " / ".join(ocr[:6])[:240] if p["stream"] == "vga" else " / ".join(ocr[:3])[:120]
             span = p["clock"] if p.get("first_seen") in (None, p["clock"]) else f"{p['first_seen']}–{p['clock']}"
             L.append(f"🖼 {p['id']}（{_stream_name(p['stream'])}，{span}）{head}")
     if not segs:

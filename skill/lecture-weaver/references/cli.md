@@ -89,6 +89,7 @@
   - `--course/-c` 
 - **`lw note show`** — 显示笔记当前内容（含你在笔记软件中的修改）
   - `<note>` 笔记 ID 或课时 ID
+  - `--draft` 输出成草稿标记（{t}/{f}/{m}），改完可直接 lw note save
 - **`lw note history`** — 版本历史
   - `<note>` 
 - **`lw note diff`** — 比较两个版本（默认最新两版）
@@ -109,6 +110,10 @@
   - `--role` textbook/lab_guide/slides/code/reference/homework/exam/notes
   - `--title` 
   - `--note` 
+  - `--ocr` PDF 一律用本地 OCR 提取文字（扫描版和乱码文字层会自动 OCR，一般不用加）
+- **`lw material refresh`** — 重新提取已导入资料的文字（如早先导入的 PDF 文字是乱码）
+  - `<material>` 
+  - `--ocr` PDF 一律用本地 OCR
 - **`lw material link`** — 把资料关联到课程/课时
   - `<material>` 
   - `--course/-c` 

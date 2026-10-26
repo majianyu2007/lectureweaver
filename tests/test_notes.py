@@ -161,3 +161,61 @@ def test_coverage_gaps_point_at_uncited_teaching():
     gaps = N.coverage_gaps(segs, [N._secs("10:10:00"), N._secs("10:39:00")])
     assert gaps and gaps[0][0] == "10:14" and gaps[0][1] == "10:35"
     assert N.coverage_gaps(segs, [N._secs(f"10:{m:02d}:00") for m in range(10, 40, 5)]) == []
+
+
+def test_section_without_class_anchor_is_flagged(kb, lec):
+    note = N.get_or_create(kb, "lecture", lec)
+    draft = (
+        "# 拷贝与缓冲\n\n## 1. 文件拷贝\n\n{t 10:10:00} 用 read 的返回值控制写出的字节数，最后一次可能读不满整个缓冲区。\n\n"
+        "## 2. 缓冲流\n\n### 读一行\n\n{t 11:05:00} readLine 一次读一行，读到末尾返回 null，循环条件据此判断。\n\n"
+        "## 3. NIO 通道\n\n> [!quote] 资料：教材第 11 章\n> FileChannel 可以在两个通道之间直接传输数据，transferTo 一次调用完成拷贝。\n\n"
+        "> [!tip] AI 补充\n> 大文件拷贝用 transferTo 往往更快，因为数据不必经过用户态缓冲区。\n\n"
+        "## 自测\n\n1. read 返回 -1 表示什么？读到了文件末尾，循环应当结束。\n"
+    )
+    rr = N.render(kb, note, draft, N.notes_root() / "x.md", N.notes_root())
+    w = next(x for x in rr.warnings if "没有任何课堂时间点" in x)
+    # a section counts its sub-sections; summaries and quizzes are exempt
+    assert "“3. NIO 通道”" in w and "2. 缓冲流" not in w and "自测" not in w
+
+
+def test_logic_words_listed_for_math_courses_only(kb):
+    cid = make_course(kb, cid="2026-2027-1:7654321", name="概率论", code="7654321", subject="math")
+    lid = make_lecture(kb, cid, lid="2026-10-20_7654321_p3-4", date="2026-10-20")
+    note = N.get_or_create(kb, "lecture", lid)
+    draft = (
+        "# 协方差\n\n{t 10:10:00} 乘积分解 $E(XY)=E(X)E(Y)$ 必须有独立条件。期望的线性性质对任意随机变量成立。\n\n"
+        "> [!tip] AI 补充\n> 不相关就足以保证乘积分解，独立只是充分条件。\n\n"
+        "{t 11:05:00} $|\\rho|=1$ 当且仅当 $P(Y=aX+b)=1$。\n"
+    )
+    rr = N.render(kb, note, draft, N.notes_root() / "x.md", N.notes_root())
+    assert not rr.errors
+    assert any("必须有独立条件" in c for c in rr.checks) and any("当且仅当" in c for c in rr.checks)
+    assert not any("充分条件" in c for c in rr.checks)  # callouts are not classroom text
+    assert all("{t" not in c for c in rr.checks)
+
+    other = N.get_or_create(kb, "lecture", make_lecture(kb, make_course(kb)))
+    assert N.render(kb, other, draft, N.notes_root() / "y.md", N.notes_root()).checks == []
+
+
+def test_material_page_beyond_pdf_is_an_error(kb, lec):
+    kb.x("INSERT INTO materials(id,sha256,filename,kind,title,path,text_path,units,imported_at) VALUES(?,?,?,?,?,?,?,?,?)",
+         "m_abcdef123456", "x", "ch4.pdf", "pdf", "第4章", "materials/m_abcdef123456/ch4.pdf", "materials/m_abcdef123456/content.md", 32, 0)
+    kb.db.commit()
+    note = N.get_or_create(kb, "lecture", lec)
+    ok = N.render(kb, note, "# 大数定律\n\n{t 10:10:00} 见 {m m_abcdef123456 p.10}\n", N.notes_root() / "x.md", N.notes_root())
+    assert not ok.errors and "#page=10" in ok.text
+    bad = N.render(kb, note, "# 大数定律\n\n{t 10:10:00} 见 {m m_abcdef123456 p.363}\n", N.notes_root() / "x.md", N.notes_root())
+    assert any("只有 32 页" in e for e in bad.errors)
+
+
+def test_saved_note_converts_back_to_draft_markup(kb, lec):
+    kb.x("INSERT INTO materials(id,sha256,filename,kind,title,path,text_path,units,imported_at) VALUES(?,?,?,?,?,?,?,?,?)",
+         "m_abcdef123456", "x", "第4章.pdf", "pdf", "第4章", "materials/m_abcdef123456/第4章.pdf", "materials/m_abcdef123456/content.md", 32, 0)
+    kb.db.commit()
+    note = N.get_or_create(kb, "lecture", lec)
+    draft = "# 拷贝\n\n## 1. 读写\n\n{t 10:10:00} read 返回读到的字节数。\n\n{f F001}\n\n> [!quote] 资料：第4章\n> 原文。{m m_abcdef123456 p.13}\n\n{t 11:05:30} 第二段。\n"
+    N.save(kb, note, draft, {})
+    note = N.get_or_create(kb, "lecture", lec)
+    text = N.version_text(kb, note["id"], note["current_version"])
+    assert "lw:sources" in text
+    assert N.to_draft(kb, note, text) == draft

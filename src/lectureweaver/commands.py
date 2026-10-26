@@ -640,6 +640,7 @@ def spec_notes(sub):
     p.add_argument("--course", "-c")
     p = _add(g, "show", cmd_note_show, "显示笔记当前内容（含你在笔记软件中的修改）")
     p.add_argument("note", help="笔记 ID 或课时 ID")
+    p.add_argument("--draft", action="store_true", help="输出成草稿标记（{t}/{f}/{m}），改完可直接 lw note save")
     p = _add(g, "history", cmd_note_history, "版本历史")
     p.add_argument("note")
     p = _add(g, "diff", cmd_note_diff, "比较两个版本（默认最新两版）")
@@ -671,8 +672,12 @@ def cmd_note_save(args):
         note = N.get_or_create(kb, args.kind, args.lecture, _course_id(kb, args.course) if args.course else None, args.key)
         if args.check:
             rr = N.render(kb, note, draft, N.notes_root() / (note.get("vault_path") or "x.md"), N.notes_root())
-            emit(args, {"errors": rr.errors, "warnings": rr.warnings, "stats": rr.stats},
-                 "\n".join([("有错误：" if rr.errors else f"引用校验通过；有 {len(rr.warnings)} 条写作提醒，建议改完再保存：" if rr.warnings else "校验通过")] + [f"- {e}" for e in rr.errors] + [f"- 提醒：{w}" for w in rr.warnings]) + f"\n统计：{rr.stats}")
+            checks = []
+            if rr.checks:
+                checks = ["核对（不是错误）：这些句子带“必须/才/只有/当且仅当/充分/必要”。口头讲课最容易在这里把条件说强或说反，"
+                          "逐条对照幻灯片截图和标准结论确认条件与方向，确认无误的不用改："] + [f"  · {c}" for c in rr.checks]
+            emit(args, {"errors": rr.errors, "warnings": rr.warnings, "checks": rr.checks, "stats": rr.stats},
+                 "\n".join([("有错误：" if rr.errors else f"引用校验通过；有 {len(rr.warnings)} 条写作提醒，建议改完再保存：" if rr.warnings else "校验通过")] + [f"- {e}" for e in rr.errors] + [f"- 提醒：{w}" for w in rr.warnings] + checks) + f"\n统计：{rr.stats}")
             return 1 if rr.errors else 0
         mode = "replace" if args.replace else ("merge" if args.merge else "safe")
         out = N.save(kb, note, draft, {"model": args.model, "style": args.style}, mode=mode, title=args.title, allow_drop=args.allow_drop)
@@ -719,6 +724,8 @@ def cmd_note_show(args):
     N.sync_in(kb, n)
     n = _note_by(kb, args.note)
     text = N.version_text(kb, n["id"], n["current_version"])
+    if args.draft:
+        text = N.to_draft(kb, n, text)
     kb.close()
     emit(args, {"id": n["id"], "version": n["current_version"], "text": text}, text)
 
@@ -803,6 +810,10 @@ def spec_materials(sub):
     p.add_argument("--role", help="textbook/lab_guide/slides/code/reference/homework/exam/notes")
     p.add_argument("--title")
     p.add_argument("--note")
+    p.add_argument("--ocr", action="store_true", help="PDF 一律用本地 OCR 提取文字（扫描版和乱码文字层会自动 OCR，一般不用加）")
+    p = _add(g, "refresh", cmd_material_refresh, "重新提取已导入资料的文字（如早先导入的 PDF 文字是乱码）")
+    p.add_argument("material")
+    p.add_argument("--ocr", action="store_true", help="PDF 一律用本地 OCR")
     p = _add(g, "link", cmd_material_link, "把资料关联到课程/课时")
     p.add_argument("material")
     p.add_argument("--course", "-c")
@@ -828,7 +839,7 @@ def cmd_material_add(args):
     out = []
     try:
         for f in args.files:
-            m, new, warn = M.import_file(kb, Path(f), title=args.title if len(args.files) == 1 else None, note=args.note)
+            m, new, warn = M.import_file(kb, Path(f), title=args.title if len(args.files) == 1 else None, note=args.note, force_ocr=args.ocr)
             if cid:
                 M.link(kb, m["id"], "course", cid, args.role, args.note)
             for lid in args.lecture or []:
@@ -839,6 +850,20 @@ def cmd_material_add(args):
     finally:
         kb.close()
     emit(args, out, "\n".join(f"{'导入' if o['new'] else '已存在'} {o['id']} 《{o['title']}》 {o['units']} 页/段" + (f"（{o['warning']}）" if o["warning"] else "") for o in out))
+
+
+def cmd_material_refresh(args):
+    from . import materials as M
+
+    kb = _kb()
+    try:
+        m, warn = M.refresh(kb, args.material, force_ocr=args.ocr)
+    except M.MaterialError as e:
+        raise UserError(str(e))
+    finally:
+        kb.close()
+    emit(args, {"id": m["id"], "title": m["title"], "units": m["units"], "warning": warn},
+         f"已重新提取 {m['id']} 《{m['title']}》 {m['units']} 页/段" + (f"（{warn}）" if warn else ""))
 
 
 def cmd_material_link(args):

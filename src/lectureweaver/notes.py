@@ -54,6 +54,7 @@ class RenderResult:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     stats: dict = field(default_factory=dict)
+    checks: list[str] = field(default_factory=list)  # statements to verify, not to rewrite
 
 
 def sha(text: str) -> str:
@@ -164,6 +165,8 @@ def render(kb: KB, note: dict, source: str, note_path: Path, root: Path) -> Rend
         anchor = ""
         pm = re.search(r"p\.?\s*(\d+)", loc)
         if pm and target.suffix.lower() == ".pdf":
+            if r["units"] and int(pm.group(1)) > r["units"]:
+                errors.append(f"{{m {mid} {loc}}}：《{r['title'] or r['filename']}》只有 {r['units']} 页。p. 后写 PDF 的第几页，不是页脚印的页码")
             anchor = f"#page={pm.group(1)}"
         label = f"《{r['title'] or r['filename']}》{(' ' + loc) if loc else ''}"
         return f"[{label}]({target.as_uri()}{anchor})"
@@ -186,7 +189,8 @@ def render(kb: KB, note: dict, source: str, note_path: Path, root: Path) -> Rend
             warnings.append("这些时段老师讲了不少，但笔记没有引用（可能漏了内容；点名、闲聊、课间可以忽略）："
                             + "；".join(f"{a}–{b}（约 {n} 字转写）" for a, b, n in gaps[:8])
                             + "。笔记要让人不看视频也能学全，请回到学习包核对这些时段")
-    return RenderResult(body, attachments, errors, warnings, {"times": n_t, "frames": n_f, "materials": n_m})
+    checks = logic_checks(kb, note, source)
+    return RenderResult(body, attachments, errors, warnings, {"times": n_t, "frames": n_f, "materials": n_m}, checks)
 
 
 # Phrases where the writer talks about its own sourcing instead of the subject
@@ -237,7 +241,62 @@ def style_warnings(kb: KB, note: dict, source: str) -> list[str]:
     n_f = len(F_RE.findall(source))
     if n_f > 18:
         out.append(f"插了 {n_f} 张截图：只留文字说不清的（最终代码、关键图表/板书、演示过程图），一般 6–15 张")
+    if note.get("kind") == "lecture":
+        loose = unanchored_sections(source)
+        if loose:
+            out.append("这些小节没有任何课堂时间点或截图：" + "、".join(f"“{h}”" for h in loose[:6])
+                       + "。课时笔记只写这节课讲过的内容：课上讲过的补上时间点；资料里有、课上没讲的不要写进来"
+                         "（下次课讲到时再写，或另写 topic 笔记）；你自己的归纳放进 [!tip] AI 补充")
     return out
+
+
+# Headings that summarise or quiz rather than record a stretch of the class.
+_SUMMARY_HEAD = re.compile(r"自测|练习|小结|总结|要点|作业|复习|思考题")
+
+
+def unanchored_sections(source: str) -> list[str]:
+    """Headings (## and deeper) whose section, sub-sections included, cites no
+    class time or screenshot: in a lecture note that is content from a
+    material or from the writer, not from this lecture."""
+    text = re.sub(r"```.*?```", "", source, flags=re.S)
+    heads = [(m.start(), m.end(), len(m.group(1)), m.group(2).strip()) for m in re.finditer(r"^(#{2,6})\s+(.+)$", text, re.M)]
+    out = []
+    for i, (_a, b, level, title) in enumerate(heads):
+        end = next((h[0] for h in heads[i + 1 :] if h[2] <= level), len(text))
+        body = text[b:end]
+        if _SUMMARY_HEAD.search(title) or len(re.sub(r"\s", "", body)) < 40:
+            continue
+        if not (T_RE.search(body) or F_RE.search(body)):
+            out.append(title)
+    return out
+
+
+# Words that turn a statement into a claim about logic: spoken explanations
+# often state these too strongly or the wrong way round ("必须独立" for a
+# sufficient condition), and a fluent note then repeats it as a theorem.
+LOGIC_RE = re.compile(r"必须(?!记|掌握|会|背|熟|理解)|才(?:能|有|成立|可以)|只有|当且仅当|充要|充分必要|必要条件|充分条件|\\iff|\\Leftrightarrow|⟺")
+
+
+def logic_checks(kb: KB, note: dict, source: str) -> list[str]:
+    """For maths-type courses: the body sentences that assert a condition,
+    listed for verification against the slides (they are not errors)."""
+    if note.get("kind") != "lecture" or not note.get("course_id"):
+        return []
+    c = kb.q1("SELECT profile FROM courses WHERE id=?", note["course_id"])
+    if not c or loads(c["profile"], {}).get("subject") != "math":
+        return []
+    text = re.sub(r"```.*?```", "", source, flags=re.S)
+    # only the classroom text (callouts are quotes from materials or AI
+    # additions), and only statements: not headings or "必须记住"
+    plain = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith((">", "#")))
+    out: list[str] = []
+    for m in LOGIC_RE.finditer(plain):
+        a = max(plain.rfind("\n", 0, m.start()), plain.rfind("。", 0, m.start()), m.start() - 40)
+        b = min(x for x in (plain.find("\n", m.end()), plain.find("。", m.end()), m.end() + 40) if x >= 0)
+        snippet = T_RE.sub("", plain[a + 1 : b]).strip()
+        if snippet and snippet not in out:
+            out.append(snippet)
+    return out[:12]
 
 
 def coverage_gaps(segs: list[dict], cited: list[int], radius: int = 180, min_chars: int = 600) -> list[tuple[str, str, int]]:
@@ -683,6 +742,34 @@ def reexport_all(kb: KB) -> dict:
         done += 1
     kb.db.commit()
     return {"written": done, "kept_user_files": skipped}
+
+
+_LINK_T = re.compile(r"\[(\d{1,2}:\d{2})\]\(https://[^)\s]*[?&]videoId=([^&)\s]+)&latestWatchTime=(\d+)\)")
+_LINK_F = re.compile(r"!\[(F\d{3,}) · [^\]]*\]\([^)]*\)")
+_LINK_M = re.compile(r"\[《[^》]*》\s*([^\]]*)\]\(file://[^)\s]*/materials/(m_[0-9a-f]+)/[^)#\s]*(?:#page=(\d+))?\)")
+
+
+def to_draft(kb: KB, note: dict, text: str) -> str:
+    """The inverse of render(): a saved note (with the user's edits) back in
+    draft markup, so it can be revised and saved again."""
+    recs = {r["id"]: r for r in _recs_with_windows(kb, note["lecture_id"])} if note.get("lecture_id") else {}
+
+    def t_back(m):
+        r = recs.get(m.group(2))
+        if not r:
+            return m.group(0)
+        return f"{{t {(r['start'] + timedelta(seconds=int(m.group(3)))):%H:%M:%S}}}"
+
+    def m_back(m):
+        loc = m.group(1).strip() or (f"p.{m.group(3)}" if m.group(3) else "")
+        return f"{{m {m.group(2)}{(' ' + loc) if loc else ''}}}"
+
+    body = strip_frontmatter(text)
+    body = re.sub(re.escape(PROV_START) + r".*?" + re.escape(PROV_END) + r"\n?", "", body, flags=re.S)
+    body = _LINK_F.sub(lambda m: f"{{f {m.group(1)}}}", body)
+    body = _LINK_T.sub(t_back, body)
+    body = _LINK_M.sub(m_back, body)
+    return body.strip() + "\n"
 
 
 def _relink_materials(kb: KB, text: str) -> str:
