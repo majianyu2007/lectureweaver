@@ -137,10 +137,22 @@ class YlbClient:
         return r.status_code == 200
 
     def request(self, method: str, url: str, *, params=None, json_body=None, _retried: bool = False) -> Any:
-        try:
-            r = self.http.request(method, url, params=params, json=json_body, headers=self._headers())
-        except httpx.HTTPError as e:
-            raise PlatformError(f"云课堂网络错误：{e.__class__.__name__}") from e
+        # All calls are reads (the POSTs are queries), so a failure is retried.
+        # The API answers in well under a second; when it does not, one of the
+        # servers behind it is stuck (2026-10-27: every other call hung for
+        # 30 s, then HTTP 500) and a quick retry usually reaches another one.
+        tries = 4
+        for attempt in range(tries):
+            try:
+                r = self.http.request(method, url, params=params, json=json_body, headers=self._headers(),
+                                      timeout=httpx.Timeout(15.0, connect=10.0))
+            except httpx.TransportError as e:
+                if attempt == tries - 1:
+                    raise PlatformError(f"云课堂网络错误：{e.__class__.__name__}（重试 {tries} 次仍失败，稍后再试）") from e
+            else:
+                if r.status_code not in (500, 502, 503, 504) or attempt == tries - 1:
+                    break
+            time.sleep(1 + attempt)
         if r.status_code == 401 and not _retried:
             if not self._refresh():
                 if not self._relogin:
@@ -211,17 +223,26 @@ class YlbClient:
             json_body=body,
         )
 
-    def all_recordings(self, class_ids, school_year: str, term) -> list[dict]:
+    def all_recordings(self, class_ids, school_year: str, term, weeks=None) -> list[dict]:
+        """Recordings of the classes. With ``weeks`` the term is fetched week by
+        week: a whole-term query became slow enough for the server to give up
+        (HTTP 500 after 30 s, seen 2026-10-27) while one week answers at once."""
         out: list[dict] = []
-        page = 1
-        while True:
-            r = self.recordings_page(class_ids, school_year, term, page=page)
-            items = (r or {}).get("videoInfoResourceList") or []
-            out.extend(items)
-            total = int((r or {}).get("total") or 0)
-            if not items or len(out) >= total:
-                return out
-            page += 1
+        seen: set = set()
+        for week in weeks or [None]:
+            page, got = 1, 0
+            while True:
+                r = self.recordings_page(class_ids, school_year, term, page=page, week=week)
+                items = (r or {}).get("videoInfoResourceList") or []
+                got += len(items)
+                for it in items:
+                    if it.get("id") not in seen:
+                        seen.add(it.get("id"))
+                        out.append(it)
+                if not items or got >= int((r or {}).get("total") or 0):
+                    break
+                page += 1
+        return out
 
     def course_recordings(self, course_table_id: str) -> list[dict]:
         """Months → ``recordVideos`` of one course table (教学班)."""

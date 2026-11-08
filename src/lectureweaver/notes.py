@@ -289,11 +289,12 @@ def logic_checks(kb: KB, note: dict, source: str) -> list[str]:
     # only the classroom text (callouts are quotes from materials or AI
     # additions), and only statements: not headings or "必须记住"
     plain = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith((">", "#")))
+    plain = re.sub(r" ?\{t\s+[0-9:]+\s*\} ?", "", plain)
     out: list[str] = []
     for m in LOGIC_RE.finditer(plain):
         a = max(plain.rfind("\n", 0, m.start()), plain.rfind("。", 0, m.start()), m.start() - 40)
         b = min(x for x in (plain.find("\n", m.end()), plain.find("。", m.end()), m.end() + 40) if x >= 0)
-        snippet = T_RE.sub("", plain[a + 1 : b]).strip()
+        snippet = plain[a + 1 : b].strip()
         if snippet and snippet not in out:
             out.append(snippet)
     return out[:12]
@@ -334,6 +335,9 @@ def _secs(clock: str) -> int:
 
 
 # ---------------------------------------------------------------- frontmatter + provenance
+_OWN_FM = {"lw_id", "lw_version", "lw_kind", "course", "lecture", "date", "week", "teacher", "generated_by", "style", "updated", "tags"}
+
+
 def frontmatter(kb: KB, note: dict, version: int, meta: dict) -> str:
     fm = {"lw_id": note["id"], "lw_version": version, "lw_kind": note["kind"]}
     if note.get("course_id"):
@@ -349,16 +353,55 @@ def frontmatter(kb: KB, note: dict, version: int, meta: dict) -> str:
         fm["style"] = meta["style"]
     fm["updated"] = datetime.now().strftime("%Y-%m-%d %H:%M")
     tags = ["lectureweaver"] + ([f"lw/{note['kind']}"] if note.get("kind") else [])
+    extra = fm_fields(meta.get("user_frontmatter") or "")
+    tags += [t for t in _fm_list(extra.pop("tags", ("", ""))[1]) if t not in tags and not t.startswith("lw/")]
     lines = ["---"]
     for k, v in fm.items():
         lines.append(f"{k}: {json.dumps(v, ensure_ascii=False) if isinstance(v, str) and (':' in v or v.startswith(('[', '{'))) else v}")
-    lines.append("tags: [" + ", ".join(tags) + "]")
+    # block style, as Obsidian writes it: otherwise opening the note rewrites
+    # the list and the file looks edited
+    lines += ["tags:"] + [f"  - {t}" for t in tags]
+    # properties the user added in the note app are kept as written
+    lines += [raw for k, (raw, _v) in extra.items() if k not in _OWN_FM]
     lines.append("---")
     return "\n".join(lines) + "\n"
 
 
 def strip_frontmatter(text: str) -> str:
     return FRONT_RE.sub("", text, count=1)
+
+
+def fm_fields(text: str) -> dict[str, tuple[str, str]]:
+    """Top-level frontmatter keys → (raw lines, value text)."""
+    m = FRONT_RE.match(text)
+    out: dict[str, tuple[str, str]] = {}
+    key = None
+    for ln in (m.group(1).splitlines() if m else []):
+        km = re.match(r"([^\s:#][^:]*):(.*)$", ln)
+        if km and not ln.startswith((" ", "\t", "-")):
+            key = km.group(1).strip()
+            out[key] = (ln, km.group(2).strip())
+        elif key:
+            raw, val = out[key]
+            out[key] = (raw + "\n" + ln, (val + "\n" + ln.strip()).strip())
+    return out
+
+
+def _fm_list(val: str) -> list[str]:
+    val = val.strip()
+    if val.startswith("["):
+        items = val.strip("[]").split(",")
+    else:
+        items = [x[1:] if x.startswith("-") else x for x in val.splitlines()]
+    return [x.strip().strip("\"'") for x in items if x.strip().strip("\"'")]
+
+
+def _fm_values(text: str) -> dict[str, object]:
+    """Frontmatter as values, so a pure reformat (quotes, list style) compares equal."""
+    out: dict[str, object] = {}
+    for k, (_raw, v) in fm_fields(text).items():
+        out[k] = tuple(_fm_list(v)) if v.startswith(("[", "-")) or "\n" in v else v.strip("\"'")
+    return out
 
 
 PROV_START = "<!-- lw:sources -->"
@@ -481,6 +524,13 @@ def sync_in(kb: KB, note: dict) -> str:
     cur = p.read_text("utf-8")
     if sha(cur) == note.get("exported_hash"):
         return "none"
+    exp = exported_text(kb, note)
+    if exp is not None and strip_frontmatter(exp) == strip_frontmatter(cur) and _fm_values(exp) == _fm_values(cur):
+        # The note app only reformatted the properties (e.g. Obsidian turns
+        # "tags: [a, b]" into a list): not an edit.
+        kb.x("UPDATE notes SET exported_hash=? WHERE id=?", sha(cur), note["id"])
+        kb.db.commit()
+        return "none"
     # Record each distinct hand-edited state once.
     if not kb.q1("SELECT 1 FROM note_versions WHERE note_id=? AND sha256=?", note["id"], sha(cur)):
         _store_version(kb, note, cur, "user", {"message": "在笔记软件中的修改"})
@@ -571,6 +621,8 @@ def save(kb: KB, note: dict, draft: str, meta: dict, mode: str = "safe", title: 
     if rr.errors:
         raise NoteError("笔记草稿有问题，未保存：\n- " + "\n- ".join(rr.errors))
     version = (kb.q1("SELECT MAX(version) AS v FROM note_versions WHERE note_id=?", note["id"])["v"] or 0) + 1
+    if note_path.exists():
+        meta = {**meta, "user_frontmatter": note_path.read_text("utf-8")}
     final = assemble(kb, note, version, rr.text, meta)
     _store_version(kb, note, final, "ai", meta)
     # Keep the draft with its {t}/{f}/{m} markup, so the note can be rendered

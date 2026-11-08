@@ -67,6 +67,7 @@ def main(argv: list[str] | None = None) -> int:
     from nwafu_cas import CasError
 
     from .platform.cas import AuthError
+    from .platform.ylb import PlatformError
     from .prompt import PromptUnavailable
 
     try:
@@ -77,6 +78,11 @@ def main(argv: list[str] | None = None) -> int:
         if getattr(args, "json", False):
             print(json.dumps({"error": "auth", "kind": e.kind, "message": str(e)}, ensure_ascii=False))
         return 3
+    except PlatformError as e:
+        print(f"云课堂出错：{e}。已有的课时和笔记不受影响，稍后重试即可", file=sys.stderr)
+        if getattr(args, "json", False):
+            print(json.dumps({"error": "platform", "message": str(e)}, ensure_ascii=False))
+        return 4
     except PromptUnavailable as e:
         print(f"错误：{e}", file=sys.stderr)
         return 2

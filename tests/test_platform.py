@@ -144,3 +144,43 @@ def test_process_skips_a_lecture_another_worker_holds(kb, capsys):
     out = capsys.readouterr().out
     assert "正在处理这个课时，跳过" in out and lid in out
     assert kb.stage(lid, "details") is None  # nothing was run
+
+
+def test_ylb_retries_a_stuck_server_and_fetches_week_by_week(monkeypatch):
+    import json
+
+    import httpx
+
+    from lectureweaver.platform import ylb as Y
+
+    monkeypatch.setattr(Y.time, "sleep", lambda s: None)
+    calls = []
+
+    def handler(req):
+        body = json.loads(req.content or b"{}")
+        calls.append(body.get("week"))
+        if len(calls) == 1:
+            raise httpx.ReadTimeout("stuck", request=req)
+        if len(calls) == 2:
+            return httpx.Response(500, json={"error": "Internal Server Error"})
+        week = body["week"]
+        items = [{"id": f"w{week}-{i}"} for i in range(2)] + ([{"id": "w1-0"}] if week == 2 else [])
+        return httpx.Response(200, json={"videoInfoResourceList": items, "total": len(items)})
+
+    y = Y.YlbClient(httpx.Client(transport=httpx.MockTransport(handler)), Y.YlbToken(user_id="u"))
+    recs = y.all_recordings("c1", "2026-2027", 1, weeks=[1, 2])
+    assert [r["id"] for r in recs] == ["w1-0", "w1-1", "w2-0", "w2-1"]  # deduplicated across weeks
+    assert calls == [1, 1, 1, 2]
+
+
+def test_platform_error_is_reported_without_traceback(monkeypatch, capsys):
+    from lectureweaver import commands
+    from lectureweaver.cli import main
+    from lectureweaver.platform.ylb import PlatformError
+
+    def boom(args):
+        raise PlatformError("云课堂网络错误：ReadTimeout")
+
+    monkeypatch.setattr(commands, "cmd_sync", boom)
+    assert main(["sync"]) == 4
+    assert "稍后重试" in capsys.readouterr().err

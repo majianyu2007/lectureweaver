@@ -106,6 +106,31 @@ def test_new_version_that_keeps_user_text_is_applied(kb, lec):
     assert "复习版" in p.read_text("utf-8") and "我的理解" in p.read_text("utf-8")
 
 
+def test_property_reformat_by_the_note_app_is_not_an_edit(kb, lec):
+    note = N.get_or_create(kb, "lecture", lec)
+    N.save(kb, note, DRAFT, {"model": "m"})
+    p = vault_file(kb, note["id"])
+    text = p.read_text("utf-8")
+    assert "tags:\n  - lectureweaver\n  - lw/lecture\n" in text
+    # what Obsidian does when the note is opened: other quoting/list style
+    p.write_text(text.replace("tags:\n  - lectureweaver\n  - lw/lecture", "tags: [lectureweaver, lw/lecture]")
+                 .replace("generated_by: m", 'generated_by: "m"'), encoding="utf-8")
+    assert N.sync_in(kb, dict(kb.q1("SELECT * FROM notes WHERE id=?", note["id"]))) == "none"
+    assert [h["author"] for h in N.history(kb, note["id"])] == ["ai"]
+
+
+def test_properties_the_user_added_survive_a_new_version(kb, lec):
+    note = N.get_or_create(kb, "lecture", lec)
+    N.save(kb, note, DRAFT, {})
+    p = vault_file(kb, note["id"])
+    p.write_text(p.read_text("utf-8").replace("  - lw/lecture\n", "  - lw/lecture\n  - 期中\nstatus: 已复习\naliases:\n  - 拷贝\n"), encoding="utf-8")
+    out = N.save(kb, note, DRAFT.replace("文件拷贝", "文件拷贝与缓冲"), {})
+    assert out.exported, out.message
+    t = p.read_text("utf-8")
+    assert "  - 期中\n" in t and "status: 已复习\n" in t and "aliases:\n  - 拷贝\n" in t
+    assert t.count("lw_version:") == 1 and "lw_version: 3" in t
+
+
 def test_deleted_content_does_not_come_back_silently(kb, lec):
     note = N.get_or_create(kb, "lecture", lec)
     N.save(kb, note, DRAFT, {})
@@ -185,13 +210,14 @@ def test_logic_words_listed_for_math_courses_only(kb):
     draft = (
         "# 协方差\n\n{t 10:10:00} 乘积分解 $E(XY)=E(X)E(Y)$ 必须有独立条件。期望的线性性质对任意随机变量成立。\n\n"
         "> [!tip] AI 补充\n> 不相关就足以保证乘积分解，独立只是充分条件。\n\n"
-        "{t 11:05:00} $|\\rho|=1$ 当且仅当 $P(Y=aX+b)=1$。\n"
+        "{t 11:05:00} $|\\rho|=1$ 当且仅当 $P(Y=aX+b)=1$。\n\n"
+        "前文 {t 11:06:00} 随机变量" + "的" * 26 + "方差为零当且仅当几乎处处为常数\n"
     )
     rr = N.render(kb, note, draft, N.notes_root() / "x.md", N.notes_root())
     assert not rr.errors
     assert any("必须有独立条件" in c for c in rr.checks) and any("当且仅当" in c for c in rr.checks)
     assert not any("充分条件" in c for c in rr.checks)  # callouts are not classroom text
-    assert all("{t" not in c for c in rr.checks)
+    assert all("{t" not in c and ":00}" not in c for c in rr.checks)
 
     other = N.get_or_create(kb, "lecture", make_lecture(kb, make_course(kb)))
     assert N.render(kb, other, draft, N.notes_root() / "y.md", N.notes_root()).checks == []
@@ -219,3 +245,16 @@ def test_saved_note_converts_back_to_draft_markup(kb, lec):
     text = N.version_text(kb, note["id"], note["current_version"])
     assert "lw:sources" in text
     assert N.to_draft(kb, note, text) == draft
+
+
+def test_note_check_lints_saved_notes(kb, lec, capsys):
+    from lectureweaver.cli import main
+
+    note = N.get_or_create(kb, "lecture", lec)
+    N.save(kb, note, DRAFT, {})
+    p = vault_file(kb, note["id"])
+    # the user adds a section in the note app that cites nothing from class
+    p.write_text(p.read_text("utf-8").replace(N.PROV_START, "## 扩展\n\n" + "课外读到的内容，和这节课无关但写得很长。" * 3 + "\n\n" + N.PROV_START), encoding="utf-8")
+    assert main(["note", "check", lec]) == 0
+    out = capsys.readouterr().out
+    assert "“扩展”" in out and "检查 1 篇" in out

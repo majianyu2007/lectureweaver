@@ -636,6 +636,9 @@ def spec_notes(sub):
     p.add_argument("--replace", action="store_true", help="明确覆盖你的修改（旧内容保留在历史中）")
     p.add_argument("--allow-drop", action="store_true", help="明确允许新版本不包含你补充的内容")
     p.add_argument("--check", action="store_true", help="只校验不保存")
+    p = _add(g, "check", cmd_note_check, "检查已保存的笔记（含你在笔记软件中的修改）：引用、写作提醒、数学课的核对清单")
+    p.add_argument("note", nargs="*", help="笔记 ID 或课时 ID（默认全部）")
+    p.add_argument("--course", "-c")
     p = _add(g, "list", cmd_note_list, "列出笔记")
     p.add_argument("--course", "-c")
     p = _add(g, "show", cmd_note_show, "显示笔记当前内容（含你在笔记软件中的修改）")
@@ -672,12 +675,8 @@ def cmd_note_save(args):
         note = N.get_or_create(kb, args.kind, args.lecture, _course_id(kb, args.course) if args.course else None, args.key)
         if args.check:
             rr = N.render(kb, note, draft, N.notes_root() / (note.get("vault_path") or "x.md"), N.notes_root())
-            checks = []
-            if rr.checks:
-                checks = ["核对（不是错误）：这些句子带“必须/才/只有/当且仅当/充分/必要”。口头讲课最容易在这里把条件说强或说反，"
-                          "逐条对照幻灯片截图和标准结论确认条件与方向，确认无误的不用改："] + [f"  · {c}" for c in rr.checks]
             emit(args, {"errors": rr.errors, "warnings": rr.warnings, "checks": rr.checks, "stats": rr.stats},
-                 "\n".join([("有错误：" if rr.errors else f"引用校验通过；有 {len(rr.warnings)} 条写作提醒，建议改完再保存：" if rr.warnings else "校验通过")] + [f"- {e}" for e in rr.errors] + [f"- 提醒：{w}" for w in rr.warnings] + checks) + f"\n统计：{rr.stats}")
+                 "\n".join([("有错误：" if rr.errors else f"引用校验通过；有 {len(rr.warnings)} 条写作提醒，建议改完再保存：" if rr.warnings else "校验通过")] + _check_lines(rr)) + f"\n统计：{rr.stats}")
             return 1 if rr.errors else 0
         mode = "replace" if args.replace else ("merge" if args.merge else "safe")
         out = N.save(kb, note, draft, {"model": args.model, "style": args.style}, mode=mode, title=args.title, allow_drop=args.allow_drop)
@@ -695,6 +694,43 @@ def cmd_note_save(args):
         lines += [f"  - {x[:80]}" for x in out.missing_user_lines[:10]]
     lines += [f"提醒：{w}" for w in out.warnings]
     emit(args, out.__dict__, "\n".join(lines))
+
+
+def _check_lines(rr) -> list[str]:
+    out = [f"- {e}" for e in rr.errors] + [f"- 提醒：{w}" for w in rr.warnings]
+    if rr.checks:
+        out += ["核对（不是错误）：这些句子带“必须/才/只有/当且仅当/充分/必要”。口头讲课最容易在这里把条件说强或说反，"
+                "逐条对照幻灯片截图和标准结论确认条件与方向，确认无误的不用改："] + [f"  · {c}" for c in rr.checks]
+    return out
+
+
+def cmd_note_check(args):
+    from . import notes as N
+
+    kb = _kb()
+    if args.note:
+        ns = [_note_by(kb, x) for x in args.note]
+    else:
+        where, a = "WHERE vault_path IS NOT NULL", []
+        if args.course:
+            where, a = where + " AND course_id=?", [_course_id(kb, args.course)]
+        ns = [dict(r) for r in kb.q(f"SELECT * FROM notes {where} ORDER BY lecture_id, id", *a)]
+    rows, lines = [], []
+    for n in ns:
+        N.sync_in(kb, n)  # check what is in the note app now
+        n = _note_by(kb, n["id"])
+        draft = N.to_draft(kb, n, N.version_text(kb, n["id"], n["current_version"]))
+        rr = N.render(kb, n, draft, N.notes_root() / (n.get("vault_path") or "x.md"), N.notes_root())
+        rows.append({"note": n["id"], "lecture": n.get("lecture_id"), "version": n["current_version"],
+                     "errors": rr.errors, "warnings": rr.warnings, "checks": rr.checks})
+        if rr.errors or rr.warnings or rr.checks:
+            lines += [f"{n.get('lecture_id') or n['id']}（v{n['current_version']}，{n.get('vault_path') or '未导出'}）"] + _check_lines(rr) + [""]
+    kb.close()
+    bad = sum(1 for r in rows if r["errors"])
+    lines.append(f"检查 {len(rows)} 篇：{bad} 篇有错误，{sum(1 for r in rows if r['warnings'])} 篇有写作提醒，"
+                 f"{sum(1 for r in rows if r['checks'])} 篇有待核对的句子。改法：lw note show <课时ID> --draft > 草稿 → 修改 → lw note save")
+    emit(args, rows, "\n".join(lines))
+    return 1 if bad else 0
 
 
 def _course_id(kb, q):

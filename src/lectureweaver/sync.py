@@ -165,9 +165,16 @@ def sync(kb: KB, session, term: str | None = None, with_timetable: bool = True, 
         rep.timetable_rows = len(ehall_sessions)
 
     # ---------------------------------------------------------- recordings
+    weeks = None
+    if cal:
+        # up to next week (platform week labels can be one off); a past term: all of it
+        today = date.today()
+        cur = cal.week_of(today)
+        last = cur + 1 if cur else (cal.week_count + 4 if today > cal.first_monday else 0)
+        weeks = list(range(1, min(last, cal.week_count + 4) + 1)) or None
     for rc in rec_courses:
         cid = ylb_course_map[rc["courseId"]]
-        recs = y.all_recordings(rc.get("classIds"), school_year, term_no)
+        recs = y.all_recordings(rc.get("classIds"), school_year, term_no, weeks=weeks)
         for r in recs:
             exists = kb.q1("SELECT id FROM recordings WHERE id=?", r["id"])
             if not exists:
