@@ -9,8 +9,8 @@ Dialog backends, in order of preference:
 * Windows - PowerShell + WinForms (masked input for secrets)
 * Linux   - ``zenity`` (GNOME) or ``kdialog`` (KDE), when a display exists
 * any     - Tk (``tkinter``), when a display exists
-Prompt texts are handed over in environment variables, so Chinese text and
-quotes never need shell escaping.
+Prompt texts are handed over as arguments (macOS) or environment variables,
+so Chinese text and quotes never need shell escaping.
 """
 
 from __future__ import annotations
@@ -64,30 +64,37 @@ def _run(cmd: list[str], env_extra: dict[str, str]) -> str:
 
 
 # ------------------------------------------------------------------ macOS
+def _osa(script: str, *args: str) -> list[str]:
+    """osascript command with the texts as run-handler arguments. Not via
+    ``system attribute``: AppleScript decodes environment variables in the
+    legacy system encoding, so Chinese texts came out garbled on a Mac set to
+    Chinese; arguments arrive as Unicode."""
+    return ["osascript", "-e", "on run argv\n" + script + "\nend run", *args]
+
+
 class MacDialogPrompter(Prompter):
     def ask(self, message: str, secret: bool = False, default: str = "") -> str:
         hidden = " with hidden answer" if secret else ""
         script = (
-            "display dialog (system attribute \"LW_MSG\") default answer (system attribute \"LW_DEF\")"
-            f"{hidden} with title \"LectureWeaver\" buttons {{\"取消\", \"确定\"}} default button \"确定\"\n"
+            "display dialog (item 1 of argv) default answer (item 2 of argv)"
+            f"{hidden} with title \"LectureWeaver\" buttons {{\"取消\", \"确定\"}} default button \"确定\" cancel button \"取消\"\n"
             "text returned of result"
         )
-        return _run(["osascript", "-e", script], {"LW_MSG": message, "LW_DEF": default})
+        return _run(_osa(script, message, default), {})
 
     def choose(self, message: str, options: list[str]) -> int:
         script = (
-            "set opts to paragraphs of (system attribute \"LW_OPTS\")\n"
-            "set r to choose from list opts with title \"LectureWeaver\" with prompt (system attribute \"LW_MSG\") default items {item 1 of opts}\n"
+            "set opts to paragraphs of (item 2 of argv)\n"
+            "set r to choose from list opts with title \"LectureWeaver\" with prompt (item 1 of argv) default items {item 1 of opts}\n"
             "if r is false then error number -128\n"
             "item 1 of r"
         )
-        v = _run(["osascript", "-e", script], {"LW_MSG": message, "LW_OPTS": "\n".join(options)})
+        v = _run(_osa(script, message, "\n".join(options)), {})
         return options.index(v)
 
     def info(self, message: str) -> None:
         print(message, file=sys.stderr)
-        subprocess.run(["osascript", "-e", "display notification (system attribute \"LW_MSG\") with title \"LectureWeaver\""],
-                       capture_output=True, env={**os.environ, "LW_MSG": message})
+        subprocess.run(_osa("display notification (item 1 of argv) with title \"LectureWeaver\"", message), capture_output=True)
 
 
 # ------------------------------------------------------------------ Windows

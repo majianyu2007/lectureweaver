@@ -66,6 +66,25 @@ def test_no_gui_gives_clear_message(monkeypatch):
         prompt.dialog_prompter()
 
 
+def test_mac_dialog_texts_are_passed_as_arguments(monkeypatch):
+    import subprocess
+
+    from lectureweaver import prompt
+
+    calls = []
+    monkeypatch.setattr(prompt, "_run", lambda cmd, env: calls.append(cmd) or "企业微信验证码")
+    m = prompt.MacDialogPrompter()
+    assert m.choose("学校要求二次认证", ["短信验证码", "企业微信验证码"]) == 1
+    m.ask("验证码", secret=True)
+    for cmd in calls:
+        assert "system attribute" not in cmd[2]  # decoded in the legacy encoding: garbled Chinese
+    assert calls[0][3:] == ["学校要求二次认证", "短信验证码\n企业微信验证码"]
+    if sys.platform == "darwin":  # the real thing, without showing a dialog
+        r = subprocess.run(prompt._osa("set opts to paragraphs of (item 2 of argv)\nreturn (item 1 of argv) & item 2 of opts",
+                                       "学校", "短信\n企业微信"), capture_output=True, text=True, encoding="utf-8")
+        assert r.stdout.strip() == "学校企业微信"
+
+
 def test_ocr_none_backend_is_reported(monkeypatch, tmp_path):
     from PIL import Image
 
