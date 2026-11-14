@@ -85,6 +85,9 @@
   - `--replace` 明确覆盖你的修改（旧内容保留在历史中）
   - `--allow-drop` 明确允许新版本不包含你补充的内容
   - `--check` 只校验不保存
+- **`lw note check`** — 检查已保存的笔记（含你在笔记软件中的修改）：引用、写作提醒、数学课的核对清单
+  - `<note>` 笔记 ID 或课时 ID（默认全部）
+  - `--course/-c` 
 - **`lw note list`** — 列出笔记
   - `--course/-c` 
 - **`lw note show`** — 显示笔记当前内容（含你在笔记软件中的修改）
@@ -154,7 +157,7 @@
   - `--type` 题型：recall/apply/transfer/review
   - `--misconception` 暴露出的具体误解
   - `--session` 
-  - `--harness` 当前 AI 工具名，如 claude-code / codex
+  - `--harness` 当前 AI 工具名，如 claude-code / codex / agy
 - **`lw learn status`** — 知识点掌握情况（带依据）
   - `--course/-c` 
   - `<name>` 
@@ -205,5 +208,5 @@
   - `--subject` 
   - `--note-prefs` 对这门课笔记的偏好（自然语言，会写进学习包）
 - **`lw doctor`** — 检查运行环境、登录、知识库、笔记目录与授权（AI 每次开始工作前先运行）
-- **`lw skill install`** — 把 Skill 安装到 Claude Code / Codex / oh-my-pi 的 skills 目录（优先链接，Windows 无权限时复制）
-  - `--target` 默认 claude 和 codex
+- **`lw skill install`** — 把 Skill 安装到 Claude Code / Codex / Antigravity (agy) / oh-my-pi 的 skills 目录（优先链接，Windows 无权限时复制）
+  - `--target` 默认 claude、codex 和 agy

@@ -4,7 +4,7 @@
 ![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-把西农（西北农林科技大学）云课堂的**课堂实录**（三路录像、平台转写）、**教务课表**和**你自己的课程资料**整理成可追溯、可持续积累的学习资料，并让 AI（Claude Code、Codex 等）基于这些资料一步步教你、记住你学到哪里。
+把西农（西北农林科技大学）云课堂的**课堂实录**（三路录像、平台转写）、**教务课表**和**你自己的课程资料**整理成可追溯、可持续积累的学习资料，并让 AI（Claude Code、Codex、Antigravity 等）基于这些资料一步步教你、记住你学到哪里。
 
 - 形态：本机命令行 `lw` + Skill `lecture-weaver`（`skill/lecture-weaver/`）。支持 macOS、Linux、Windows。
 - 资料与学习状态保存在独立的知识库目录（默认 `~/LectureWeaver`），不依赖任何一次聊天或某个模型的记忆；可备份，可在不同电脑、不同系统之间迁移。
@@ -37,7 +37,7 @@ lw init --notes "<你的 Obsidian Vault>/课程笔记"
 # whisper-cli / ffmpeg 不在 PATH 里时：lw init --whisper-bin <路径> --ffmpeg <路径>
 lw auth login --gui     # 弹出系统对话框输入学号、密码；学校要求二次认证时选择方式（无桌面时用 lw auth login 在终端输入）
 # 或 lw auth login --qr   # 用微信或企业微信扫码登录，不输入密码
-lw skill install        # 安装 Skill 到 ~/.claude/skills 和 ~/.codex/skills（Windows 无链接权限时复制）
+lw skill install        # 安装 Skill 到 ~/.claude/skills、~/.codex/skills 和 ~/.gemini/config/skills（Windows 无链接权限时复制）
 lw doctor               # 检查各项是否就绪
 ```
 
@@ -55,7 +55,7 @@ lw doctor               # 检查各项是否就绪
 
 ## 使用
 
-在 Claude Code / Codex 里直接说，例如：
+在 Claude Code / Codex / Antigravity CLI（`agy`）里直接说，例如：
 
 - “把第七周 Java 的课堂整理好，重点看老师演示的代码，存到我的笔记目录。”
 - “把数据库这门课还没整理过的课堂补齐，已经完成的不要重复处理。”

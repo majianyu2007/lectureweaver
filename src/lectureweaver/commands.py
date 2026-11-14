@@ -1016,7 +1016,7 @@ def spec_learn(sub):
     p.add_argument("--type", help="题型：recall/apply/transfer/review")
     p.add_argument("--misconception", help="暴露出的具体误解")
     p.add_argument("--session")
-    p.add_argument("--harness", help="当前 AI 工具名，如 claude-code / codex")
+    p.add_argument("--harness", help="当前 AI 工具名，如 claude-code / codex / agy")
     p = _add(g, "status", cmd_learn_status, "知识点掌握情况（带依据）")
     p.add_argument("--course", "-c")
     p.add_argument("name", nargs="?")
@@ -1332,8 +1332,8 @@ def cmd_course_set(args):
 def spec_doctor(sub):
     _add(sub, "doctor", cmd_doctor, "检查运行环境、登录、知识库、笔记目录与授权（AI 每次开始工作前先运行）")
     g = sub.add_parser("skill", help="安装 lecture-weaver Skill 到 AI 工具").add_subparsers(metavar="<子命令>")
-    p = _add(g, "install", cmd_skill_install, "把 Skill 安装到 Claude Code / Codex / oh-my-pi 的 skills 目录（优先链接，Windows 无权限时复制）")
-    p.add_argument("--target", action="append", choices=list(SKILL_DIRS), help="默认 claude 和 codex")
+    p = _add(g, "install", cmd_skill_install, "把 Skill 安装到 Claude Code / Codex / Antigravity (agy) / oh-my-pi 的 skills 目录（优先链接，Windows 无权限时复制）")
+    p.add_argument("--target", action="append", choices=list(SKILL_DIRS), help="默认 claude、codex 和 agy")
 
 
 def cmd_doctor(args):
@@ -1389,14 +1389,14 @@ def cmd_doctor(args):
     emit(args, checks, "\n".join(lines))
 
 
-SKILL_DIRS = {"claude": ".claude/skills", "codex": ".codex/skills", "omp": ".omp/agent/skills"}
+SKILL_DIRS = {"claude": ".claude/skills", "codex": ".codex/skills", "agy": ".gemini/config/skills", "omp": ".omp/agent/skills"}
 
 
 def cmd_skill_install(args):
     src = Path(__file__).resolve().parents[2] / "skill" / "lecture-weaver"
     if not src.exists():
         raise UserError(f"找不到 Skill 目录 {src}")
-    targets = args.target or ["claude", "codex"]
+    targets = args.target or ["claude", "codex", "agy"]
     done = []
     for t in targets:
         base = Path.home() / SKILL_DIRS[t]

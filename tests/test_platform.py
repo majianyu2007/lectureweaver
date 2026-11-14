@@ -203,3 +203,16 @@ def test_platform_error_is_reported_without_traceback(monkeypatch, capsys):
     monkeypatch.setattr(commands, "cmd_sync", boom)
     assert main(["sync"]) == 4
     assert "稍后重试" in capsys.readouterr().err
+
+
+def test_skill_install_defaults_include_claude_codex_and_agy(monkeypatch, tmp_path):
+    from pathlib import Path
+
+    from lectureweaver.cli import main
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    assert main(["skill", "install"]) == 0
+    for rel in (".claude/skills/lecture-weaver", ".codex/skills/lecture-weaver", ".gemini/config/skills/lecture-weaver"):
+        assert (tmp_path / rel / "SKILL.md").is_file()
+    # re-running is idempotent
+    assert main(["skill", "install"]) == 0
