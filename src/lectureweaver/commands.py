@@ -195,6 +195,8 @@ def spec_setup(sub):
     p.add_argument("--ffmpeg", help="ffmpeg 可执行文件路径（不在 PATH 里时）")
     p.add_argument("--whisper-bin", help="whisper.cpp 的 whisper-cli 路径（不在 PATH 里时）")
     p.add_argument("--whisper-model", help="whisper 模型文件（默认在 ~/.cache/whisper/ 下查找）")
+    p.add_argument("--soffice", help="LibreOffice soffice 可执行文件路径（PPTX 转 PDF 使用；默认自动探测）")
+    p.add_argument("--proxy", help="访问 Google/GitHub 的代理地址（如 http://127.0.0.1:7890；传 none 清除；不影响校内请求）")
     p = _add(sub, "sync", cmd_sync, "同步课表与课堂实录元数据（不下载视频）")
     p.add_argument("--term", help="学期，如 2025-2026-2（默认当前学期；写错时会列出云课堂里可选的学期）")
     p.add_argument("--no-timetable", action="store_true", help="不访问教务课表")
@@ -224,6 +226,10 @@ def cmd_init(args):
         cfg.whisper_bin = str(Path(args.whisper_bin).expanduser().resolve())
     if args.whisper_model:
         cfg.whisper_model = str(Path(args.whisper_model).expanduser().resolve())
+    if args.soffice:
+        cfg.soffice_bin = str(Path(args.soffice).expanduser().resolve())
+    if args.proxy is not None:
+        cfg.proxy = "" if args.proxy.strip().lower() in ("", "none", "off", "direct") else args.proxy.strip()
     cfg.save()
     kb = KB(cfg.kb_path)
     kb.close()
@@ -269,11 +275,13 @@ def cmd_courses(args):
     )
     data = [
         {"id": r["id"], "name": r["name"], "code": r["code"], "teacher": r["teacher"], "lectures": r["n_lect"],
-         "materials": r["n_mat"], "subject": loads(r["profile"], {}).get("subject"), "aliases": loads(r["aliases"], [])}
+         "materials": r["n_mat"], "subject": loads(r["profile"], {}).get("subject"),
+         "no_nb": bool(loads(r["profile"], {}).get("no_nb")), "aliases": loads(r["aliases"], [])}
         for r in rows
     ]
     text = "\n".join(
         f"{d['name']:<16} 课号 {d['code'] or '-':<8} {d['teacher'] or '':<6} 课时 {d['lectures']:>3}  资料 {d['materials']}  [{d['subject']}]"
+        + ("  [排除NB]" if d["no_nb"] else "")
         + (f"  别名：{'、'.join(d['aliases'])}" if d["aliases"] else "")
         for d in data
     )
@@ -1160,7 +1168,7 @@ def spec_consent(sub):
     g = sub.add_parser("consent", help="云端资料发送授权").add_subparsers(metavar="<子命令>")
     _add(g, "status", cmd_consent_status, "查看已授权的服务与范围")
     p = _add(g, "grant", cmd_consent_grant, "授权服务在指定范围内使用资料（用户确认后再运行）")
-    p.add_argument("service", help="harness / asr:<名称> / llm:<名称>")
+    p.add_argument("service", help="harness / notebooklm / gdrive / asr:<名称> / llm:<名称>")
     p.add_argument("--scopes", required=True, help="逗号分隔：transcripts,screenshots,materials,notes,learning,audio")
     p.add_argument("--note")
     p = _add(g, "revoke", cmd_consent_revoke, "撤销授权")
@@ -1252,12 +1260,16 @@ def spec_backup(sub):
     p.add_argument("--kb", help="恢复到的知识库目录（默认当前配置）")
     p.add_argument("--force", action="store_true")
     _add(sub, "check", cmd_kb_check, "检查当前知识库的完整性与对应关系")
-    g = sub.add_parser("course", help="课程设置：别名、类型、笔记偏好").add_subparsers(metavar="<子命令>")
-    p = _add(g, "set", cmd_course_set, "设置课程别名/类型/笔记偏好")
+    g = sub.add_parser("course", help="课程设置：别名、类型、笔记偏好与 NotebookLM 开关").add_subparsers(metavar="<子命令>")
+    p = _add(g, "set", cmd_course_set, "设置课程别名/类型/笔记偏好/NotebookLM 同步选项")
     p.add_argument("course")
     p.add_argument("--alias", action="append", help="别名（如 数据库、DB）")
     p.add_argument("--subject", choices=["programming", "programming_lab", "math", "humanities", "language", "lab", "general", "pe"])
-    p.add_argument("--note-prefs", help="对这门课笔记的偏好（自然语言，会写进学习包）")
+    p.add_argument("--note-prefs", help="对这门课笔记的偏好（自然语言，会写进学习包与导读）")
+    nb_grp = p.add_mutually_exclusive_group()
+    nb_grp.add_argument("--no-nb", action="store_true", help="批量同步 NotebookLM 时排除这门课")
+    nb_grp.add_argument("--nb", action="store_true", help="恢复将这门课纳入 NotebookLM 同步")
+    p.add_argument("--nb-granularity", choices=["auto", "lecture", "week", "stage", "course"], help="同步到 NotebookLM 的默认粒度")
 
 
 def cmd_backup_create(args):
@@ -1321,26 +1333,269 @@ def cmd_course_set(args):
         prof["subject"] = args.subject
     if args.note_prefs:
         prof["note_prefs"] = args.note_prefs
+    if args.no_nb:
+        prof["no_nb"] = True
+    elif args.nb:
+        prof.pop("no_nb", None)
+    if args.nb_granularity:
+        prof["nb_granularity"] = args.nb_granularity
     kb.x("UPDATE courses SET aliases=?, profile=? WHERE id=?", dumps(aliases), dumps(prof), cid)
     kb.db.commit()
     kb.close()
-    emit(args, {"aliases": aliases, "profile": prof}, f"{r['name']}：别名 {'、'.join(aliases) or '无'}；类型 {prof.get('subject')}；偏好 {prof.get('note_prefs') or '无'}")
+    nb_txt = "已排除" if prof.get("no_nb") else f"启用（粒度 {prof.get('nb_granularity', 'auto')}）"
+    emit(
+        args,
+        {"aliases": aliases, "profile": prof},
+        f"{r['name']}：别名 {'、'.join(aliases) or '无'}；类型 {prof.get('subject')}；偏好 {prof.get('note_prefs') or '无'}；NotebookLM {nb_txt}",
+    )
 
 
-# =====================================================================  doctor / skill
+# =====================================================================  notebooklm
+def _progress_log(args):
+    import sys
+
+    if getattr(args, "json", False):
+        return lambda m: print(m, file=sys.stderr, flush=True)
+    return lambda m: print(m, flush=True)
+
+
+@spec
+def spec_nb(sub):
+    g = sub.add_parser("nb", help="NotebookLM：课程导读/笔记/资料清洗与增量同步").add_subparsers(metavar="<子命令>")
+    p = _add(g, "login", cmd_nb_login, "登录 Google NotebookLM（默认打开本机浏览器自动捕获会话，或配置 Google Drive OAuth）")
+    p.add_argument("--backend", default="web", choices=["web", "gdrive"], help="同步后端（默认 web）")
+    p.add_argument("--browser", choices=["chrome", "msedge", "chromium"], help="web 后端使用的浏览器（默认优先本机 Chrome/Edge）")
+    p.add_argument("--client-secrets", help="gdrive 后端首次登录使用的 Google Cloud 桌面端 OAuth 客户端 JSON 文件")
+    p.add_argument("--timeout", type=int, default=300, help="等待登录完成的超时秒数（默认 300）")
+
+    p = _add(g, "status", cmd_nb_status, "查看 NotebookLM 登录态、账号付费配额（50/300）及各课程待同步差异")
+    p.add_argument("--course", "-c", help="课程名/别名/课程号")
+    p.add_argument("--term", help="学期（默认当前学期）")
+    p.add_argument("--backend", default="web", choices=["web", "gdrive"])
+    p.add_argument("--offline", action="store_true", help="不联网查询账号配额，仅查看本机待同步状态")
+
+    p = _add(g, "build", cmd_nb_build, "仅在本机生成清洗后的 NotebookLM 导入包（导读 + 笔记 + 转换后的资料）")
+    p.add_argument("--course", "-c", help="课程名/别名/课程号（默认所有有笔记且未排除的课程）")
+    p.add_argument("--term", help="学期（默认当前学期）")
+    p.add_argument("--granularity", choices=["auto", "lecture", "week", "stage", "course"], help="信源粒度（默认 auto）")
+    p.add_argument("--out", "-o", default=".lw-scratch/notebooklm", help="导出目录（默认 .lw-scratch/notebooklm）")
+
+    p = _add(g, "sync", cmd_nb_sync, "将清洗后的课程导读、笔记与资料增量同步到云端 NotebookLM / Google Drive")
+    p.add_argument("--course", "-c", help="课程名/别名/课程号（默认所有有笔记且未排除的课程）")
+    p.add_argument("--term", help="学期（默认当前学期）")
+    p.add_argument("--backend", default="web", choices=["web", "gdrive"], help="同步后端（默认 web）")
+    p.add_argument("--granularity", choices=["auto", "lecture", "week", "stage", "course"], help="信源粒度（默认 auto：付费版逐课时上传，免费版超限时自动合并）")
+    p.add_argument("--dry-run", action="store_true", help="只预览新增/更新/移除计划，不实际上传")
+
+    p = _add(g, "logout", cmd_nb_logout, "清除本机保存的 NotebookLM 会话或 Google Drive OAuth 令牌")
+    p.add_argument("--backend", default="web", choices=["web", "gdrive"])
+    p.add_argument("--forget-client", action="store_true", help="gdrive 后端同时删除保存的 OAuth 客户端配置")
+
+
+def cmd_nb_login(args):
+    from . import notebooklm as NB
+
+    log = _progress_log(args)
+    try:
+        if args.backend == "web":
+            res = NB.web_login(browser=args.browser, timeout_s=args.timeout, log=log)
+            msg = f"NotebookLM 登录成功：{res.get('email') or '已连接'} — {res['tier_label']}"
+        else:
+            cs = Path(args.client_secrets) if args.client_secrets else None
+            res = NB.gdrive_login(client_secrets_path=cs, timeout_s=args.timeout, log=log)
+            msg = f"Google Drive OAuth 授权成功（范围：{res['scope']}）"
+    except NB.NotebookLMIntegrationError as e:
+        raise UserError(str(e))
+    emit(args, res, msg)
+
+
+def cmd_nb_logout(args):
+    from . import notebooklm as NB
+
+    if args.backend == "web":
+        removed = NB.web_logout()
+        emit(args, {"ok": True, "removed": removed}, "已清除 NotebookLM 本地登录态" if removed else "本地无已保存的 NotebookLM 登录态")
+    else:
+        removed = NB.gdrive_logout(forget_client=args.forget_client)
+        emit(args, {"ok": True, "removed": removed}, "已清除 Google Drive OAuth 令牌" if removed else "本地无已保存的 Google Drive 令牌")
+
+
+def cmd_nb_status(args):
+    from . import notebooklm as NB
+    from .consent import allowed
+
+    kb = _kb()
+    try:
+        service = "notebooklm" if args.backend == "web" else "gdrive"
+        has_consent = allowed(kb, service, NB.CONSENT_SCOPES)
+        if args.backend == "web":
+            acct = NB.web_account_status(verify_online=not args.offline)
+            src_limit = acct.get("source_limit")
+        else:
+            acct = NB.gdrive_account_status()
+            src_limit = None
+
+        courses = NB.select_nb_courses(kb, course_query=args.course, term=args.term)
+        course_diffs = []
+        for c in courses:
+            bundle = NB.build_course_bundle(kb, c, source_limit=src_limit, sync_vault=True)
+            course_diffs.append(NB.local_diff_summary(kb, bundle, args.backend))
+    except NB.NotebookLMIntegrationError as e:
+        kb.close()
+        raise UserError(str(e))
+    kb.close()
+
+    data = {"backend": args.backend, "consent": has_consent, "account": acct, "courses": course_diffs}
+    lines = []
+    if args.backend == "web":
+        lines.append(f"后端：web（notebooklm-py） | 登录：{'已登录' if acct['logged_in'] else '未登录'} {acct.get('email') or ''}".rstrip())
+        lines.append(f"账号配额：{acct['tier_label']}" + (f"（已有笔记本 {acct['notebook_count']}/{acct['notebook_limit'] or '?'}）" if acct.get("notebook_count") is not None else ""))
+        if acct.get("error"):
+            lines.append(f"连接提示：{acct['error']}")
+    else:
+        lines.append(f"后端：gdrive（官方 OAuth drive.file） | 登录：{'已授权' if acct['logged_in'] else '未登录'} | 客户端配置：{'已保存' if acct['has_client_config'] else '未配置'}")
+    lines.append(f"云端发送授权（{service}）：{'已授权' if has_consent else f'未授权（同步前需运行 lw consent grant {service} --scopes notes,materials,learning）'}")
+    if not course_diffs:
+        lines.append("当前没有待同步课程（需至少有 1 篇已保存笔记且未标记 --no-nb）")
+    for d in course_diffs:
+        lines.append(
+            f"- {d['course']} [粒度:{d['granularity']}] 共 {d['total_sources']} 个信源："
+            f"已同步未变 {d['unchanged']}，待新增 {len(d['to_add'])}，待更新 {len(d['to_update'])}，待清理旧分片 {len(d['to_remove_stale'])}"
+            + (f"（已关联笔记本 {d['notebook_id'][:8]}…）" if d.get("notebook_id") else "（尚未创建远端笔记本）")
+        )
+        for w in d["warnings"]:
+            lines.append(f"    提示：{w}")
+    emit(args, data, "\n".join(lines))
+
+
+def cmd_nb_build(args):
+    from . import notebooklm as NB
+
+    kb = _kb()
+    out_root = Path(args.out).expanduser()
+    built = []
+    lines = []
+    try:
+        courses = NB.select_nb_courses(kb, course_query=args.course, term=args.term)
+        if not courses:
+            kb.close()
+            emit(args, {"built": []}, "没有符合条件的课程（先为课程保存至少一篇笔记）")
+            return 0
+        for c in courses:
+            bundle = NB.build_course_bundle(kb, c, granularity=args.granularity, source_limit=None, sync_vault=True)
+            cdir = NB.export_bundle_to_dir(bundle, out_root)
+            built.append({
+                "course": bundle.course_name,
+                "dir": str(cdir.resolve()),
+                "granularity": bundle.granularity,
+                "sources": len(bundle.items),
+                "notes": bundle.note_count,
+                "materials": bundle.material_count,
+                "warnings": bundle.warnings,
+            })
+            lines.append(f"{bundle.course_name}：写出 {len(bundle.items)} 个信源（粒度 {bundle.granularity}）→ {cdir.resolve()}")
+            for w in bundle.warnings:
+                lines.append(f"  提示：{w}")
+    except NB.NotebookLMIntegrationError as e:
+        kb.close()
+        raise UserError(str(e))
+    kb.close()
+    emit(args, {"built": built}, "\n".join(lines))
+
+
+def cmd_nb_sync(args):
+    from . import notebooklm as NB
+    from .consent import ConsentRequired
+
+    kb = _kb()
+    log = _progress_log(args)
+    try:
+        res = NB.sync_courses(
+            kb,
+            course_query=args.course,
+            term=args.term,
+            backend=args.backend,
+            granularity=args.granularity,
+            dry_run=args.dry_run,
+            log=log,
+        )
+    except (NB.NotebookLMIntegrationError, ConsentRequired) as e:
+        kb.close()
+        raise UserError(str(e))
+    except Exception as e:  # noqa: BLE001
+        kb.close()
+        raise UserError(f"NotebookLM 同步失败：{e}")
+    kb.close()
+
+    courses = res.get("courses") or []
+    if not courses:
+        emit(args, res, "没有需要同步的课程（当前学期无已保存笔记，或均已标记 --no-nb）")
+        return 0
+    lines = []
+    if res.get("account_tier"):
+        lines.append(f"账号配额：{res['account_tier']}")
+    for c in courses:
+        prefix = "[预览] " if c.get("dry_run") else ""
+        loc = c.get("notebook_url") or c.get("folder_url") or c.get("notebook_title") or ""
+        failed_list = c.get("failed") or []
+        lines.append(
+            f"{prefix}{c['course']}（粒度 {c['granularity']}）：新增 {len(c['added'])}，更新 {len(c['updated'])}，"
+            f"跳过未改 {c['unchanged']}，清理旧分片 {len(c['removed_stale'])}"
+            + (f"，失败 {len(failed_list)}" if failed_list else "")
+            + (f"，保留手动添加信源 {c['preserved_manual_sources']}" if c.get("preserved_manual_sources") else "")
+            + (f"\n  → {loc}" if loc else "")
+        )
+        for f_item in failed_list:
+            lines.append(f"  ✗ 失败信源：{f_item['title']} —— {f_item['error']}")
+        for w in c.get("warnings") or []:
+            lines.append(f"  提示：{w}")
+    emit(args, res, "\n".join(lines))
+    return 1 if res.get("any_failed") else 0
+
+
+# =====================================================================  doctor / update / skill
 @spec
 def spec_doctor(sub):
-    _add(sub, "doctor", cmd_doctor, "检查运行环境、登录、知识库、笔记目录与授权（AI 每次开始工作前先运行）")
+    _add(sub, "doctor", cmd_doctor, "检查运行环境、登录、知识库、笔记目录、授权与版本更新（AI 每次开始工作前先运行）")
+    p = _add(sub, "update", cmd_update, "检查并一键更新 LectureWeaver 本体与核心协议库（nwafu-cas、notebooklm-py）")
+    p.add_argument("--check", action="store_true", help="仅检查是否有新版本，不执行更新")
+    p.add_argument("--only", choices=["lw", "deps"], help="只更新本体（lw）或只更新依赖（deps）")
+    p.add_argument("--yes", "-y", action="store_true", help="直接执行更新")
     g = sub.add_parser("skill", help="安装 lecture-weaver Skill 到 AI 工具").add_subparsers(metavar="<子命令>")
     p = _add(g, "install", cmd_skill_install, "把 Skill 安装到 Claude Code / Codex / Antigravity (agy) / oh-my-pi 的 skills 目录（优先链接，Windows 无权限时复制）")
     p.add_argument("--target", action="append", choices=list(SKILL_DIRS), help="默认 claude、codex 和 agy")
+
+
+def cmd_update(args):
+    from . import updater as U
+
+    if args.check:
+        rep = U.check_updates(timeout=6.0)
+        lw_r = rep["lectureweaver"]
+        lines = [f"LectureWeaver（{lw_r['mode']}）：{lw_r['summary']}" + (" [本地有未提交改动]" if lw_r.get("dirty") else "")]
+        for d in rep["dependencies"]:
+            if d["checked"]:
+                st = f"可升级 {d['installed']} -> {d['latest']}" if d["update_available"] else f"已是最新（{d['installed']}）"
+            else:
+                st = f"当前 {d['installed'] or '未安装'}（检查失败：{d['error']}）"
+            lines.append(f"依赖 {d['package']}：{st}")
+        lines.append("运行 `lw update` 可一键拉取并升级。" if rep["any_update"] else "全部组件均为最新。")
+        emit(args, rep, "\n".join(lines))
+        return 0
+
+    try:
+        res = U.run_update(only=args.only, log=_progress_log(args))
+    except U.UpdateError as e:
+        raise UserError(str(e))
+    lines = [*res["actions"], *[f"提示：{w}" for w in res["warnings"]]]
+    emit(args, res, "\n".join(lines) or "无需更新")
 
 
 def cmd_doctor(args):
     import shutil as sh
 
     from .asr import whisper_available
-    from .config import MachineConfig
+    from .config import MachineConfig, find_soffice
     from .secrets import get_secret
     from .session import password_account
 
@@ -1349,7 +1604,6 @@ def cmd_doctor(args):
 
     def add(name, ok, detail, fix=""):
         checks.append({"name": name, "ok": ok, "detail": detail, "fix": fix})
-
 
     from .media import ffmpeg_install_hint
 
@@ -1365,6 +1619,8 @@ def cmd_doctor(args):
         add("本地 OCR", O.backend() != "none", O.backend_description(), O.install_hint())
     except Exception as e:  # noqa: BLE001
         add("本地 OCR", False, str(e), O.install_hint())
+    soffice = find_soffice(cfg)
+    add("PPTX 转 PDF（可选）", bool(soffice), soffice or "未安装 LibreOffice（PPTX 同步 NotebookLM 时回退文字版）", "安装 LibreOffice 可保留幻灯片排版与图示")
     add("知识库", True, str(cfg.kb_path))
     add("笔记目录", bool(cfg.notes_dir), cfg.notes_dir or "未设置", "lw init --notes <Obsidian Vault 中的文件夹>")
     from .secrets import backend_name
@@ -1382,9 +1638,41 @@ def cmd_doctor(args):
 
     add("AI 工具读取资料的授权", allowed(kb, "harness", ["transcripts", "screenshots"]), "已授权" if allowed(kb, "harness", ["transcripts", "screenshots"]) else "未授权",
         "先向用户说明并征得同意，再 lw consent grant harness --scopes transcripts,screenshots,materials,notes,learning")
+    from . import notebooklm as NB
+
+    nb_web = NB.web_account_status(verify_online=False)
+    nb_gd = NB.gdrive_account_status()
+    nb_consent = allowed(kb, "notebooklm", NB.CONSENT_SCOPES) or allowed(kb, "gdrive", NB.CONSENT_SCOPES)
+    nb_logged = nb_web["logged_in"] or nb_gd["logged_in"]
+    nb_parts = []
+    if nb_web["logged_in"]:
+        nb_parts.append(f"web 会话已保存（{nb_web.get('email') or '详见 lw nb status'}）")
+    if nb_gd["logged_in"]:
+        nb_parts.append("gdrive OAuth 已授权")
+    if not nb_parts:
+        nb_parts.append("未登录（按需启用）")
+    nb_parts.append("云端发送已授权" if nb_consent else "云端发送未授权")
+    add("NotebookLM 同步（可选）", nb_logged, "；".join(nb_parts), "需要使用时运行 lw nb login")
     n_lect = kb.q1("SELECT COUNT(*) AS n FROM lectures")["n"]
     add("课时数据", n_lect > 0, f"{n_lect} 个课时", "lw sync")
     kb.close()
+
+    from . import updater as U
+
+    upd = U.check_updates(timeout=3.0)
+    upd_msgs = []
+    if upd["lectureweaver"]["update_available"]:
+        upd_msgs.append(f"LectureWeaver：{upd['lectureweaver']['summary']}")
+    for d in upd["dependencies"]:
+        if d["update_available"]:
+            upd_msgs.append(f"{d['package']} {d['installed']} -> {d['latest']}")
+    if upd_msgs:
+        add("版本与依赖更新", False, "；".join(upd_msgs), "运行 lw update 一键升级")
+    else:
+        lw_sum = upd["lectureweaver"]["summary"]
+        deps_sum = "，".join(f"{d['package']} {d['installed']}" for d in upd["dependencies"])
+        add("版本与依赖更新", True, f"本体 {lw_sum}；{deps_sum}", "")
+
     lines = [f"{'✓' if c['ok'] else '✗'} {c['name']}：{c['detail']}" + ("" if c["ok"] or not c["fix"] else f"  → {c['fix']}") for c in checks]
     emit(args, checks, "\n".join(lines))
 

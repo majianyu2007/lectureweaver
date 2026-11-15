@@ -34,7 +34,8 @@ from .kb import KB
 FORMAT = 1
 CONTENT_DIRS = ("lectures", "materials", "notes")
 TABLES = ["courses", "timetable", "lectures", "recordings", "stages", "materials", "material_links", "notes", "note_versions",
-          "concepts", "concept_refs", "learning_events", "mastery", "misconceptions", "consents", "settings", "terms"]
+          "concepts", "concept_refs", "learning_events", "mastery", "misconceptions", "consents", "settings", "terms",
+          "nb_notebooks", "nb_sources"]
 
 
 class BackupError(Exception):
@@ -147,7 +148,8 @@ def verify_dir(root: Path, manifest: dict | None = None) -> dict:
                 for f in json.loads(fj.read_text("utf-8")).get("frames", []):
                     if not (root / r["dir"] / f["file"]).exists():
                         problems.append(f"截图缺失 {r['dir']}/{f['file']}")
-        counts = {t: db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in TABLES}
+        existing_tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        counts = {t: (db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] if t in existing_tables else 0) for t in TABLES}
     finally:
         db.close()
     return {"ok": not problems, "problems": problems[:50], "problem_count": len(problems), "counts": counts}

@@ -1,6 +1,6 @@
 ---
 name: lecture-weaver
-description: 西农（NWAFU）个人课堂知识与学习助手。把云课堂“课堂实录”（三路录像、平台转写）、教务课表和用户自己的课程资料（PPT/PDF/Word/代码）整理成可追溯的课堂笔记，写入用户的笔记目录（Obsidian 或普通 Markdown），并基于这些资料一步步教学、记录掌握情况。当用户提到整理某节课/某周/某门课的课堂录像、补齐没整理的课、导入/关联课程资料、查某个概念出自哪节课、让你讲懂某个知识点或出题检测、改写笔记风格、备份或迁移学习资料时使用。
+description: 西农（NWAFU）个人课堂知识与学习助手。把云课堂“课堂实录”（三路录像、平台转写）、教务课表和用户自己的课程资料（PPT/PDF/Word/代码）整理成可追溯的课堂笔记，写入用户的笔记目录（Obsidian 或普通 Markdown），支持一键清洗并增量同步到 Google NotebookLM，并基于这些资料一步步教学、记录掌握情况。当用户提到整理某节课/某周/某门课的课堂录像、补齐没整理的课、导入/关联课程资料、查某个概念出自哪节课、同步课程到 NotebookLM、让你讲懂某个知识点或出题检测、改写笔记风格、检查更新、备份或迁移学习资料时使用。
 ---
 
 # LectureWeaver
@@ -16,8 +16,8 @@ description: 西农（NWAFU）个人课堂知识与学习助手。把云课堂�
 ## 授权规则（必须遵守）
 
 - 读取学习包、截图、资料、学习记录，意味着这些内容会发给你所在 AI 工具的模型服务商。`lw consent status` 中没有 `harness` 授权时：先用一两句话告诉用户“会发送哪些资料（课堂转写、截图、导入的资料、笔记、学习记录）、用途（整理笔记和讲解）、可以随时撤销”，**等用户明确同意后**再运行 `lw consent grant harness --scopes transcripts,screenshots,materials,notes,learning`。之后在这个范围内不再逐次询问。
-- 要使用新的云服务（如云端语音识别 `asr:<名>`）或扩大范围：重新说明并征得同意。授权发送资料 ≠ 授权花钱：不要擅自注册/开通付费服务，云端识别要设置 `--monthly-budget-minutes`。
-- 本地处理（whisper.cpp 语音识别、Apple Vision OCR、ffmpeg）不需要授权。
+- 要使用新的云服务（如同步到 Google NotebookLM `notebooklm` / Google Drive `gdrive`，或云端语音识别 `asr:<名>`）或扩大范围：重新说明并征得同意（例如同步 NotebookLM 前说明会将清洗后的导读、笔记与课程资料上传至用户登录的 Google NotebookLM 账号，同意后运行 `lw consent grant notebooklm --scopes notes,materials,learning`）。授权发送资料 ≠ 授权花钱：不要擅自注册/开通付费服务，云端识别要设置 `--monthly-budget-minutes`。
+- 本地处理（whisper.cpp 语音识别、Apple Vision OCR、ffmpeg、LibreOffice 转换、`lw nb build` 本地打包）不需要授权。
 
 ## 常用流程（详细步骤见 references/workflows.md）
 
@@ -30,6 +30,8 @@ description: 西农（NWAFU）个人课堂知识与学习助手。把云课堂�
 | “用这些课件把笔记完善一下” | 见 references/workflows.md D2：资料先用来改错，只补这节课讲过的内容，汇报改正清单 |
 | “把实验指导书关联到课程，分清课上讲过什么和实验还要做什么” | `lw material add 文件 -c 课程 --role lab_guide` → `lw material suggest` → 用户确认后 `lw material link -l` → 对照学习包写 `--kind topic` 笔记 |
 | “这份笔记换成适合复习的组织方式，保留我自己补充的理解” | `lw note show <课时ID> --draft`（含用户在 Obsidian 的修改，草稿标记）→ 新草稿**原样保留**用户补充的内容 → `lw note save ... --style 复习版` |
+| “把课程资料和笔记同步到 NotebookLM” | `lw nb status` 查看登录态、付费配额（50/300）与差异 → 未登录时 `lw nb login`（自动打开本机浏览器捕获会话）→ 用户同意后 `lw consent grant notebooklm --scopes notes,materials,learning` → `lw nb sync [-c 课程]`（副科排除用 `lw course set <课程> --no-nb`） |
+| “检查一下 LectureWeaver 有没有新版本并升级” | `lw update --check` 查看本体与 `nwafu-cas`/`notebooklm-py` 更新 → 用户确认后 `lw update` |
 | “备份整个知识库，换电脑后继续学” | `lw backup create`；新电脑上 `lw backup restore 文件` → `lw init --notes 目录` → `lw auth login --gui` → `lw note export` → `lw learn next` |
 
 用户用自然语言说时间范围时，换算成 `--week`、`--date`、`--since/--until`、`--course`（模糊匹配，可用 `lw course set <课程> --alias` 加别名）。不确定指哪门课/哪几次课时，先 `lw lectures ...` 列出来给用户确认。

@@ -19,6 +19,8 @@
   - `--ffmpeg` ffmpeg 可执行文件路径（不在 PATH 里时）
   - `--whisper-bin` whisper.cpp 的 whisper-cli 路径（不在 PATH 里时）
   - `--whisper-model` whisper 模型文件（默认在 ~/.cache/whisper/ 下查找）
+  - `--soffice` LibreOffice soffice 可执行文件路径（PPTX 转 PDF 使用；默认自动探测）
+  - `--proxy` 访问 Google/GitHub 的代理地址（如 http://127.0.0.1:7890；传 none 清除；不影响校内请求）
 - **`lw sync`** — 同步课表与课堂实录元数据（不下载视频）
   - `--term` 学期，如 2025-2026-2（默认当前学期；写错时会列出云课堂里可选的学期）
   - `--no-timetable` 不访问教务课表
@@ -179,7 +181,7 @@
   - `--summary` 
 - **`lw consent status`** — 查看已授权的服务与范围
 - **`lw consent grant`** — 授权服务在指定范围内使用资料（用户确认后再运行）
-  - `<service>` harness / asr:<名称> / llm:<名称>
+  - `<service>` harness / notebooklm / gdrive / asr:<名称> / llm:<名称>
   - `--scopes` 逗号分隔：transcripts,screenshots,materials,notes,learning,audio
   - `--note` 
 - **`lw consent revoke`** — 撤销授权
@@ -202,11 +204,42 @@
   - `--kb` 恢复到的知识库目录（默认当前配置）
   - `--force` 
 - **`lw check`** — 检查当前知识库的完整性与对应关系
-- **`lw course set`** — 设置课程别名/类型/笔记偏好
+- **`lw course set`** — 设置课程别名/类型/笔记偏好/NotebookLM 同步选项
   - `<course>` 
   - `--alias` 别名（如 数据库、DB）
   - `--subject` 
-  - `--note-prefs` 对这门课笔记的偏好（自然语言，会写进学习包）
-- **`lw doctor`** — 检查运行环境、登录、知识库、笔记目录与授权（AI 每次开始工作前先运行）
+  - `--note-prefs` 对这门课笔记的偏好（自然语言，会写进学习包与导读）
+  - `--no-nb` 批量同步 NotebookLM 时排除这门课
+  - `--nb` 恢复将这门课纳入 NotebookLM 同步
+  - `--nb-granularity` 同步到 NotebookLM 的默认粒度
+- **`lw nb login`** — 登录 Google NotebookLM（默认打开本机浏览器自动捕获会话，或配置 Google Drive OAuth）
+  - `--backend` 同步后端（默认 web）
+  - `--browser` web 后端使用的浏览器（默认优先本机 Chrome/Edge）
+  - `--client-secrets` gdrive 后端首次登录使用的 Google Cloud 桌面端 OAuth 客户端 JSON 文件
+  - `--timeout` 等待登录完成的超时秒数（默认 300）
+- **`lw nb status`** — 查看 NotebookLM 登录态、账号付费配额（50/300）及各课程待同步差异
+  - `--course/-c` 课程名/别名/课程号
+  - `--term` 学期（默认当前学期）
+  - `--backend` 
+  - `--offline` 不联网查询账号配额，仅查看本机待同步状态
+- **`lw nb build`** — 仅在本机生成清洗后的 NotebookLM 导入包（导读 + 笔记 + 转换后的资料）
+  - `--course/-c` 课程名/别名/课程号（默认所有有笔记且未排除的课程）
+  - `--term` 学期（默认当前学期）
+  - `--granularity` 信源粒度（默认 auto）
+  - `--out/-o` 导出目录（默认 .lw-scratch/notebooklm）
+- **`lw nb sync`** — 将清洗后的课程导读、笔记与资料增量同步到云端 NotebookLM / Google Drive
+  - `--course/-c` 课程名/别名/课程号（默认所有有笔记且未排除的课程）
+  - `--term` 学期（默认当前学期）
+  - `--backend` 同步后端（默认 web）
+  - `--granularity` 信源粒度（默认 auto：付费版逐课时上传，免费版超限时自动合并）
+  - `--dry-run` 只预览新增/更新/移除计划，不实际上传
+- **`lw nb logout`** — 清除本机保存的 NotebookLM 会话或 Google Drive OAuth 令牌
+  - `--backend` 
+  - `--forget-client` gdrive 后端同时删除保存的 OAuth 客户端配置
+- **`lw doctor`** — 检查运行环境、登录、知识库、笔记目录、授权与版本更新（AI 每次开始工作前先运行）
+- **`lw update`** — 检查并一键更新 LectureWeaver 本体与核心协议库（nwafu-cas、notebooklm-py）
+  - `--check` 仅检查是否有新版本，不执行更新
+  - `--only` 只更新本体（lw）或只更新依赖（deps）
+  - `--yes/-y` 直接执行更新
 - **`lw skill install`** — 把 Skill 安装到 Claude Code / Codex / Antigravity (agy) / oh-my-pi 的 skills 目录（优先链接，Windows 无权限时复制）
   - `--target` 默认 claude、codex 和 agy

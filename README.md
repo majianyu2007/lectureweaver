@@ -62,6 +62,7 @@ lw doctor               # 检查各项是否就绪
 - “我还是没理解关系代数的除法。结合老师这次的讲解和之前的课程，一点点教我。”
 - “把这份实验指导书关联到对应课程，帮我分清课堂讲过什么，以及实验还要求做什么。”
 - “这份笔记换一种更适合复习的组织方式，但保留我自己补充的理解。”
+- “把这学期整理好的课程笔记和课件同步到 Google NotebookLM，方便我做音频概览和考前问答。”
 - “备份整个知识库，换台电脑之后继续上次的学习。”
 
 AI 第一次读取你的课堂资料前会说明发送范围并征求同意（`lw consent`）。也可以自己用命令：
@@ -74,6 +75,8 @@ lw lectures --ready             # 素材已就绪、还没写笔记的课时（�
 lw status                       # 哪些完成、哪些不完整、哪些还没写笔记
 lw search 除法 -c 数据库         # 某个概念/例题出自哪节课的哪个时间点
 lw learn status -c 数据库        # 知识点掌握情况（带依据）
+lw nb sync                      # 将课程导读、笔记与资料增量同步到 Google NotebookLM
+lw update --check               # 检查 LectureWeaver 本体与核心协议库是否有更新
 lw backup create -o ~/Desktop
 ```
 
@@ -122,6 +125,22 @@ AI 按 `skill/lecture-weaver/references/note-guide.md` 写草稿，`lw note save
 
 `lw learn` 记录的是证据（问了什么、你怎么答的、暴露了什么误解），掌握程度由证据推出：未接触 → 讲过（未检验）→ 不稳 → 基本会 → 掌握（不同日期两次答对且含应用题、无未解决误解）。“AI 讲过”只算“讲过”。可以手动修正，但之后的新证据优先。
 
+## NotebookLM 同步与版本更新
+
+`lw nb` 将每门课整理好的资料单向、增量同步到 Google NotebookLM（一门课一个笔记本，不影响你在网页端手动添加的其他参考来源）：
+
+- **信源清洗与高保真转换**：自动先吸纳你在 Obsidian 中的手动修改；生成 `00-课程导读与知识点索引.md`（汇总课程偏好、知识点课堂出处与 `lw learn` 薄弱点/未解误区）；剥离校内长链接与悬空本地附件路径，完整保留代码块与 LaTeX 公式；`.pptx` 检测到本机 LibreOffice 时自动转 PDF 保留图示（否则回退文字版），字体编码乱码的 `.pdf` 自动改传本地 OCR 提取版 Markdown。
+- **配额自适应与双后端**：默认 `web` 后端（基于 `notebooklm-py`，浏览器登录态仅存于本机 `secrets/` 私有目录）自动检测账号单库信源上限（如付费版 300 上限时默认逐课时独立上传，免费版 50 上限超额时自动按 4 周阶段合并）；同时提供官方 OAuth 最小权限（`drive.file`）的 `gdrive` 备用后端（将笔记转为原生 Google Docs 原地更新）。可用 `lw course set <课程> --no-nb` 排除不需要建库的课程，或用 `lw nb build` 仅在本地生成导入包。
+- **显式更新检查（`lw update`）**：仅在显式运行 `lw update` 或 `lw doctor` 时检查 `LectureWeaver` 本体与关键协议依赖（`nwafu-cas`、`notebooklm-py`）的新版本；`lw update` 在工作区干净时一键拉取并升级当前运行环境。
+
+```bash
+lw nb login                     # 打开本机 Chrome/Edge 登录 NotebookLM，完成后自动保存并关闭
+lw nb status                    # 查看账号付费配额（50/300）及各门课待同步差异
+lw nb sync [-c 概率论]          # 首次需经用户同意后授权 lw consent grant notebooklm --scopes notes,materials,learning
+lw nb build -o ~/Desktop/nb     # 不联网，仅在本地导出清洗好的课程导入包
+lw update --check               # 检查本体与协议库更新（lw update 执行升级）
+```
+
 ## 备份与迁移
 
 `lw backup create` 生成一个 `.tar.gz`：SQLite 快照 + 转写/截图/资料/全部笔记版本 + 校验清单（不含密码、Cookie、API Key、本机路径、临时媒体）。新电脑上：
@@ -141,6 +160,7 @@ lw learn next                                       # 从上次的学习进度�
 
 - 本地处理（语音识别、OCR、媒体）不需要授权。
 - AI 工具读取学习包 = 资料发送给该工具的模型服务商：首次使用时说明并征得同意（`lw consent grant harness ...`），之后在范围内复用，随时 `lw consent revoke harness`。
+- 同步到 Google NotebookLM / Google Drive（`lw nb sync`）同样需先单独授权 `notebooklm` 或 `gdrive`（范围 `notes,materials,learning`）；登录态与 OAuth 令牌只保存在系统钥匙串或本机 `0600` 私有目录，绝不进入知识库或备份。
 - 云端语音识别（可选，OpenAI 兼容接口）需要单独授权和 API Key，并可设置每 30 天的分钟数上限；不会自动开通付费服务。
 - 教师机位画面可能拍到同学背影，只在录屏长时间不变时少量截取；学生机位从不使用。
 
@@ -164,7 +184,7 @@ python scripts/gen_cli_doc.py
 
 - 测试在 macOS、Linux、Windows 上由 GitHub Actions 运行（`.github/workflows/ci.yml`）。
 
-代码结构：`platform/`（统一认证、云课堂、教务）、`sync.py`（课时与课表匹配）、`mp4index.py`/`visual.py`/`audio.py`/`asr.py`/`ocr.py`（媒体）、`pipeline.py`/`packet.py`（处理与学习包）、`notes.py`（渲染、版本、冲突）、`materials.py`、`search.py`、`learning.py`、`backup.py`、`consent.py`。
+代码结构：`platform/`（统一认证、云课堂、教务）、`sync.py`（课时与课表匹配）、`mp4index.py`/`visual.py`/`audio.py`/`asr.py`/`ocr.py`（媒体）、`pipeline.py`/`packet.py`（处理与学习包）、`notes.py`（渲染、版本、冲突）、`materials.py`、`search.py`、`learning.py`、`notebooklm.py`（NotebookLM 信源构建与增量同步）、`updater.py`（显式更新检查与升级）、`backup.py`、`consent.py`。
 
 ## 免责声明
 

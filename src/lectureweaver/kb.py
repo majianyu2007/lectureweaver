@@ -20,7 +20,32 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+NB_TABLES_SQL = """
+CREATE TABLE IF NOT EXISTS nb_notebooks (
+  course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+  backend TEXT NOT NULL,               -- web|gdrive
+  notebook_id TEXT,                    -- NotebookLM notebook ID (or Drive folder ID)
+  title TEXT,
+  granularity TEXT,                    -- lecture|week|stage|course
+  remote_folder_id TEXT,               -- Google Drive folder ID when backend='gdrive'
+  created_at REAL,
+  updated_at REAL,
+  PRIMARY KEY (course_id, backend)
+);
+CREATE TABLE IF NOT EXISTS nb_sources (
+  course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+  backend TEXT NOT NULL,               -- web|gdrive
+  source_key TEXT NOT NULL,            -- guide | note:<key> | mat:<mid>[:partN]
+  remote_source_id TEXT NOT NULL,      -- NotebookLM source ID or Drive fileId
+  title TEXT,
+  kind TEXT NOT NULL,                  -- guide|note|material
+  sha256 TEXT NOT NULL,
+  synced_at REAL,
+  PRIMARY KEY (course_id, backend, source_key)
+);
+"""
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -179,7 +204,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(
   text, kind UNINDEXED, ref UNINDEXED, lecture_id UNINDEXED, course_id UNINDEXED, t UNINDEXED,
   tokenize = 'trigram'
 );
-"""
+""" + NB_TABLES_SQL
 
 
 class KB:
@@ -213,7 +238,10 @@ class KB:
         if v is None:
             self.set_meta("schema_version", str(SCHEMA_VERSION))
             self.set_meta("created_at", str(time.time()))
-        # Future migrations: if int(v) < 2: ...
+            return
+        if int(v) < 2:
+            self.db.executescript(NB_TABLES_SQL)
+            self.set_meta("schema_version", "2")
 
     def close(self) -> None:
         self.db.close()

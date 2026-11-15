@@ -77,3 +77,13 @@
 3. 用户自己输入 Key：`lw provider set-key <名> --gui`
 4. `lw consent grant asr:<名> --scopes audio`
 5. `lw process ... --asr <名>`
+
+## I. 同步到 Google NotebookLM 与检查版本更新
+
+- **本地仅打包（无需登录与云端授权）**：`lw nb build [-c 课程] [-o 目录]`。自动把 Obsidian 中的手动修改吸纳进版本库，为每门课写出 `00-课程导读与知识点索引.md`、清洗后的课堂笔记（去掉校内长链接与本地附件路径、保留代码块与公式）及转换好的课程资料（`.pptx` 经 LibreOffice 转 PDF、乱码 PDF 改用本地 OCR 文字版、HTML 交互讲义提取纯净正文与源码）。
+- **云端增量同步**：
+  1. `lw nb status` 查看登录状态、账号单库信源配额（如付费版 300 / 免费版 50）及各课程待新增/更新/清理数量。
+  2. 未登录时运行 `lw nb login`（自动打开本机 Chrome/Edge，用户在窗口中完成 Google 登录后自动保存会话并关闭窗口；或用 `lw nb login --backend gdrive --client-secrets <OAuth客户端.json>` 走官方 Google Drive `drive.file` 最小权限通道）。
+  3. 首次同步前向用户说明将上传清洗后的导读、笔记与课程资料，征得同意后运行 `lw consent grant notebooklm --scopes notes,materials,learning`（`gdrive` 后端对应 `gdrive`）。
+  4. 先可运行 `lw nb sync [-c 课程] --dry-run` 预览，再运行 `lw nb sync [-c 课程]`。仅增量更新有变动的信源，先传新版本再删旧版本，绝不触碰用户在 NotebookLM 网页端手动添加的其他来源。不需要建库的副科可用 `lw course set <课程> --no-nb` 排除。
+- **版本与协议库更新**：`lw update --check` 检查 `LectureWeaver` 本体、`nwafu-cas` 与 `notebooklm-py` 是否有新版本；确认后运行 `lw update` 一键拉取升级。

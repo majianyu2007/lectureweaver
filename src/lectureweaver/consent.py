@@ -11,9 +11,13 @@ Services:
                      packets: transcripts, screenshots, material excerpts,
                      notes, learning records. These go to that tool's model
                      provider under your account with it.
+* ``notebooklm``   - syncs cleaned course guides, notes and course materials to
+                     your Google NotebookLM account.
+* ``gdrive``       - syncs cleaned course guides, notes and course materials to
+                     your Google Drive (``drive.file`` scope) for NotebookLM.
 * ``asr:<name>``   - a cloud speech-recognition endpoint: lecture audio.
 * ``llm:<name>``   - an extra model API configured here (not required).
-Local processing (whisper.cpp, Apple Vision OCR, ffmpeg) needs no consent.
+Local processing (whisper.cpp, Apple Vision OCR, ffmpeg, LibreOffice) needs no consent.
 """
 
 from __future__ import annotations
@@ -34,6 +38,8 @@ SCOPES = {
 
 DISCLOSURE = {
     "harness": "当前使用的 AI 工具（如 Claude Code / Codex）会读取学习包来整理笔记和讲解，内容会发送给该工具的模型服务商，用途仅为本次整理与教学。",
+    "notebooklm": "清洗后的课程导读、课堂笔记与课程资料会上传到你本人登录的 Google NotebookLM 账号中，用于建立课程笔记本（不含原始录像与校内播放器链接）。",
+    "gdrive": "清洗后的课程导读、课堂笔记与课程资料会通过官方 OAuth（仅限本应用创建的 drive.file 范围）上传到你的 Google 云端硬盘，供 NotebookLM 关联同步。",
     "asr": "课堂音频会上传到你配置的云端语音识别服务，用于生成转写；可能按时长计费。",
     "llm": "选定内容会发送到你配置的模型 API。",
 }
