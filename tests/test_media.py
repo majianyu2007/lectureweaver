@@ -126,6 +126,21 @@ def test_audio_slots_use_main_screen_when_named():
     assert [[f["id"] for _, f in c] for _, c in audio_slots(det)] == [["main"]]
 
 
+def test_dedupe_keeps_the_first_visit_of_a_returning_page():
+    from PIL import Image
+
+    from lectureweaver.visual import Frame, dedupe, signature
+
+    a, b = signature(Image.new("RGB", (32, 18), "black")), signature(Image.new("RGB", (32, 18), "white"))
+    first = Frame(t=1.0, sig=a, page=0, first_seen=1.0, visits=[1.0])
+    other = Frame(t=5.0, sig=b, page=1, first_seen=5.0, visits=[5.0])
+    again = Frame(t=9.0, sig=a, page=2, first_seen=9.0, visits=[9.0])
+    out = dedupe([first, other, again], 0.003)
+    assert len(out) == 2
+    kept, visits = next(x for x in out if x[0].sig is a)
+    assert kept.page == 0 and kept.first_seen == 1.0 and visits == [1.0, 9.0]
+
+
 def test_break_changed_only_keeps_new_screens():
     from PIL import Image
 
@@ -174,8 +189,8 @@ def test_visual_uses_main_screen_and_drops_repeated_break_frames(kb, tmp_path, m
         )
         return tmp_path / name
 
-    # class slide, then a different screen held through the break
-    main = make("main.mp4", ("lightblue", 30), ("lightyellow", 30))
+    # class slide, a different screen held through the break, then the class slide returns
+    main = make("main.mp4", ("lightblue", 30), ("lightyellow", 10), ("lightblue", 20))
     aux = make("aux.mp4", ("darkgreen", 60))
     black = make("black.mp4", ("black", 60))
     from conftest import make_course, make_lecture
@@ -207,3 +222,6 @@ def test_visual_uses_main_screen_and_drops_repeated_break_frames(kb, tmp_path, m
     assert all(f["stream"] in ("vga", "vga_aux") for f in frames)
     assert sum(1 for f in frames if f["stream"] == "vga_aux") == 1
     assert frames and all("副屏" in f["reason"] for f in frames if f["stream"] == "vga_aux")
+    # the returning class slide is one page, cited at its first visit
+    blue = next(f for f in frames if f["stream"] == "vga" and f["page"].endswith("000"))
+    assert blue["clock"] == "10:54:30" and blue["also_at"]

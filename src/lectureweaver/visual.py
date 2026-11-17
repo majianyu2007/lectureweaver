@@ -11,7 +11,8 @@ Strategy per recording (all numbers configurable, defaults tuned on the
 4. Keep the *last* frame before every change (the most complete state of a
    slide / code listing), plus checkpoints during long gradual edits, and
    drop blank frames and near-duplicates (a slide shown twice is kept once,
-   with every time it appeared).
+   with the first time it appeared as its citation and every later visit
+   listed separately).
 
 The main screen recording (VGA, device "主屏") is the source. A second
 projector input ("辅屏") is only sampled at the times the main screen kept,
@@ -103,6 +104,9 @@ class Frame:
     img: Image.Image | None = None
     sig: Image.Image | None = None
     key_index: int = 0
+    page: int = 0  # which continuous screen this sample belongs to
+    first_seen: float = 0.0  # earliest moment this page was shown
+    visits: list[float] = field(default_factory=list)  # every moment, in order
 
     def release(self) -> None:
         self.img = None
@@ -251,7 +255,9 @@ def select_frames(src: KeyframeSource, p: VisualParams, extra_times: list[float]
     probe_frames = {f.key_index: f for f in src.get(sorted(set(probes)))} if probes else {}
 
     kept: list[tuple[Frame, float, list[float]]] = []  # frame, dwell seconds, times shown
-    for sc in screens:
+    for page, sc in enumerate(screens):
+        for f in sc:
+            f.page = page
         if all(is_blank(f.sig) for f in sc):
             continue
         if len(sc) == 1:
@@ -284,7 +290,8 @@ def select_frames(src: KeyframeSource, p: VisualParams, extra_times: list[float]
     out = []
     for f, dwell, shown in kept:
         f.dwell = dwell
-        f.first_seen = min(shown)
+        f.visits = sorted(set(shown + [f.t]))
+        f.first_seen = f.visits[0]
         out.append(f)
     return out
 
@@ -298,11 +305,15 @@ def dedupe(frames: list[Frame], thr: float) -> list[tuple[Frame, list[float]]]:
                 hit = j
                 break
         if hit is None:
-            out.append((f, []))
+            out.append((f, list(f.visits)))
         else:
             g, also = out[hit]
             # keep the later (more complete) image, remember when it was shown
-            out[hit] = (f, also + [g.t])
+            visits = sorted(set(also + g.visits + f.visits))
+            f.page = g.page
+            f.visits = visits
+            f.first_seen = visits[0]
+            out[hit] = (f, visits)
     out.sort(key=lambda x: x[0].t)
     return out
 

@@ -333,7 +333,7 @@ class Pipeline:
                 continue
             source = "vga" if det.get("vgaViewFiles") else "teacher"
             main_start = _parse_dt(main.get("startTime")) or _start_dt(r, det)
-            main_kept: list[tuple[float, object]] = []  # (t, signature) of saved main frames
+            main_kept: list[tuple[float, object, int]] = []  # (t, signature, page) of saved main frames
             last_sig = None
             rd = RangeReader(video_url(main))
             try:
@@ -358,14 +358,17 @@ class Pipeline:
                     save_webp(fr.img, fdir / f"{fid}.webp")
                     frames_out.append({
                         "id": fid, "rec": r["id"], "part": part, "stream": source, "t": round(fr.t, 2),
-                        "clock": _clock(main_start, fr.t), "first_seen": _clock(main_start, getattr(fr, "first_seen", fr.t)),
-                        "also_at": [_clock(main_start, a) for a in also], "dwell_s": round(getattr(fr, "dwell", 0)),
+                        "page": f"P{part}-{fr.page:03d}",
+                        "clock": _clock(main_start, fr.first_seen or fr.t),
+                        "first_seen": _clock(main_start, fr.first_seen or fr.t),
+                        "also_at": [_clock(main_start, a) for a in sorted(set(fr.visits) - {fr.first_seen})],
+                        "dwell_s": round(getattr(fr, "dwell", 0)),
                         "file": f"frames/{fid}.webp", "w": fr.img.width, "h": fr.img.height,
                         **({"reason": reason} if reason else {}),
                     })
                     if fr.sig is not None:
                         last_sig = fr.sig
-                        main_kept.append((fr.t, fr.sig))
+                        main_kept.append((fr.t, fr.sig, fr.page))
                     fr.release()
                 if skipped_break:
                     notes.append(f"第{part}段课间重复画面 {skipped_break} 张未保存")
@@ -383,7 +386,7 @@ class Pipeline:
                     movie, track = open_track(aux_rd)
                     ks = KeyframeSource(aux_rd, movie, track)
                     if main_kept:
-                        times = [t for t, _ in main_kept]
+                        times = [t for t, _, _ in main_kept]
                         query = set(times)
                         if main_start:  # also look when a break starts: aux may change while main does not
                             query |= {
@@ -399,22 +402,24 @@ class Pipeline:
                                 continue
                             k = min(near, key=lambda i: abs(times[i] - f.t))
                             if abs(times[k] - f.t) <= 2 and diff_fraction(main_kept[k][1], f.sig) > params.major_thr:
-                                pairs.append(f)
+                                pairs.append((f, main_kept[k][2]))
                         kept = []
-                        for f in pairs:
+                        for f, page in pairs:
                             if not kept or all(diff_fraction(f.sig, g.sig) > params.dedupe_thr for g in kept):
+                                f.page = page
                                 kept.append(f)
                     else:
                         # Main screen gave nothing (e.g. it stayed black): treat
                         # the secondary as the source rather than lose the lecture.
                         kept = [f for f, _ in dedupe(select_frames_logged(ks, params, self.log), params.dedupe_thr)]
                     start = _parse_dt(aux_file.get("startTime")) or main_start
-                    for fr in kept:
+                    for ai, fr in enumerate(kept, 1):
                         n += 1
                         fid = f"F{n:03d}"
                         save_webp(fr.img, fdir / f"{fid}.webp")
                         frames_out.append({
                             "id": fid, "rec": r["id"], "part": part, "stream": "vga_aux", "screen": "aux",
+                            "page": f"P{part}-{fr.page:03d}" if main_kept else f"P{part}-A{ai:03d}",
                             "t": round(fr.t, 2), "clock": _clock(start, fr.t), "first_seen": _clock(start, fr.t),
                             "also_at": [], "dwell_s": round(getattr(fr, "dwell", 0)), "file": f"frames/{fid}.webp",
                             "w": fr.img.width, "h": fr.img.height,
