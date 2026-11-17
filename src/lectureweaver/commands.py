@@ -138,7 +138,9 @@ def cmd_dev_probe(args):
                 _dump(out, f"video_{vid}", v)
                 if v.get("taskId"):
                     _dump(out, f"speech_{vid}", y.speech(v["taskId"]))
-                files = (v.get("vgaViewFiles") or []) + (v.get("teacherViewFiles") or [])
+                from .pipeline import screen_rank
+
+                files = sorted(v.get("vgaViewFiles") or [], key=screen_rank) + (v.get("teacherViewFiles") or [])
                 if files:
                     _dump(out, f"ppt_{vid}", y.ppt_pages(files[0]["id"]))
                 if r0.get("courseTableId"):

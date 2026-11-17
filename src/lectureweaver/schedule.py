@@ -42,6 +42,16 @@ def period_times(d: date, start: int, end: int) -> tuple[str, str] | None:
     return None
 
 
+def breaks(d: date, start: int, end: int) -> list[tuple[str, str]]:
+    """Gaps between consecutive periods of one session: [(end, next start)]."""
+    b = bell(d)
+    out = []
+    for p in range(start, end):
+        if p in b and p + 1 in b:
+            out.append((b[p][1], b[p + 1][0]))
+    return out
+
+
 def parse_date(s: str) -> date:
     return datetime.strptime(s[:10], "%Y-%m-%d").date()
 

@@ -8,8 +8,9 @@ Stages (each stores its result under the lecture folder and a row in
                as platform-generated - never as the teacher's words).
 ``transcript`` the platform transcript when present, else local ASR on the
                audio samples only (cloud ASR only with consent).
-``visual``     screenshots of the screen recording (keyframes only) + local
-               OCR; teacher camera only for long static-screen stretches.
+``visual``     screenshots of the main screen recording (keyframes only) + local
+               OCR; secondary screen only where it differs; teacher camera only
+               for long static-screen stretches; repeated break frames dropped.
 ``packet``     a compact Markdown study packet for the note writer.
 
 Media scratch files live in the machine tmp dir and are removed when a stage
@@ -18,12 +19,13 @@ ends, also on failure.
 
 from __future__ import annotations
 
+import bisect
 import json
 import shutil
 import time
 import traceback
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, time as dt_time, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -113,13 +115,24 @@ class Pipeline:
             self.kb.x("UPDATE recordings SET detail=? WHERE id=?", dumps(det), r["id"])
             (raw / f"detail_{r['id']}.json").write_text(dumps(det), "utf-8")
             streams = {}
-            for key, name in (("vgaViewFiles", "vga"), ("teacherViewFiles", "teacher"), ("studentViewFiles", "student")):
+
+            def _stream(name: str, f: dict, parts: int) -> None:
+                streams[name] = {
+                    "id": f.get("id"), "size": f.get("videoFileSize"), "seconds": f.get("fileLength"),
+                    "start": f.get("startTime"), "parts": parts, "device": f.get("recordDeviceName"),
+                }
+
+            main_screen, aux_screens = screen_files(det.get("vgaViewFiles") or [])
+            if main_screen:
+                _stream("vga", main_screen, 1 + len(aux_screens))
+            for i, f in enumerate(aux_screens, 1):
+                _stream(f"vga_aux{i}", f, 1)
+            for key, name in (("teacherViewFiles", "teacher"), ("studentViewFiles", "student")):
                 files = det.get(key) or []
                 if files:
-                    f = files[0]
-                    streams[name] = {"id": f.get("id"), "size": f.get("videoFileSize"), "seconds": f.get("fileLength"), "start": f.get("startTime"), "parts": len(files)}
+                    _stream(name, files[0], len(files))
             ppt = []
-            for f in (det.get("vgaViewFiles") or [])[:1] + (det.get("teacherViewFiles") or [])[:1]:
+            for f in ([main_screen] if main_screen else []) + (det.get("teacherViewFiles") or [])[:1]:
                 try:
                     ppt = y.ppt_pages(f["id"]) or []
                 except Exception:  # noqa: BLE001
@@ -208,7 +221,11 @@ class Pipeline:
             return [], None, 0
         rec_start = _start_dt(r, det)
         if len(slots) > 1:
-            self.log(f"  该录像按时间分成 {len(slots)} 个文件，逐个识别")
+            self.log(f"  该录像按时间分成 {len(slots)} 段，逐个识别")
+        if len(det.get("vgaViewFiles") or []) > 1:
+            self.log("  有两块录屏并行（主屏/辅屏），音源只用主屏")
+        elif any(not any(n == "vga" for n, _ in c) for _, c in slots):
+            self.log("  该段没有电脑录屏，音源从教师/学生机位中选")
         segs, src, total = [], None, 0
         for slot_start, cands in slots:
             got, s_src, b = self._asr_files(r, cands, work)
@@ -295,7 +312,7 @@ class Pipeline:
     def stage_visual(self, lec, work: Path) -> StageResult:
         from .ocr import OcrUnavailable
         from .platform.ylb import video_url
-        from .visual import KeyframeSource, RangeReader, VisualParams, dedupe, open_track, save_webp
+        from .visual import KeyframeSource, RangeReader, VisualParams, break_changed, dedupe, diff_fraction, is_blank, open_track, save_webp
 
         d = self.ldir(lec)
         fdir = d / "frames"
@@ -306,40 +323,117 @@ class Pipeline:
         n = 0
         for part, r in enumerate(self.recordings(lec["id"]), 1):
             det = loads(r["detail"], {}) or {}
-            vga = (det.get("vgaViewFiles") or [])
             teacher = (det.get("teacherViewFiles") or [])
-            src_files = [("vga", f) for f in vga] or [("teacher", f) for f in teacher]
-            if not vga and teacher:
+            main, aux = screen_files(det.get("vgaViewFiles") or [])
+            windows = break_windows(lec)
+            if not main and teacher:
                 notes.append(f"第{part}段没有电脑录屏，改用教师机位")
-            for stream, f in src_files:
-                rd = RangeReader(video_url(f))
+                main, aux = teacher[0], []
+            if not main:
+                continue
+            source = "vga" if det.get("vgaViewFiles") else "teacher"
+            main_start = _parse_dt(main.get("startTime")) or _start_dt(r, det)
+            main_kept: list[tuple[float, object]] = []  # (t, signature) of saved main frames
+            last_sig = None
+            rd = RangeReader(video_url(main))
+            try:
+                movie, track = open_track(rd)
+                ks = KeyframeSource(rd, movie, track)
+                picked = select_frames_logged(ks, params, self.log)
+                kept = dedupe(picked, params.dedupe_thr)
+                skipped_break = 0
+                for fr, also in kept:
+                    dt = main_start + timedelta(seconds=fr.t) if main_start else None
+                    reason = ""
+                    if in_windows(dt, windows):
+                        # During the inter-class break only new content matters:
+                        # the same slide / attendance page is not worth a frame.
+                        if not break_changed(fr.sig, last_sig, params.major_thr):
+                            skipped_break += 1
+                            fr.release()
+                            continue
+                        reason = "课间画面变化"
+                    n += 1
+                    fid = f"F{n:03d}"
+                    save_webp(fr.img, fdir / f"{fid}.webp")
+                    frames_out.append({
+                        "id": fid, "rec": r["id"], "part": part, "stream": source, "t": round(fr.t, 2),
+                        "clock": _clock(main_start, fr.t), "first_seen": _clock(main_start, getattr(fr, "first_seen", fr.t)),
+                        "also_at": [_clock(main_start, a) for a in also], "dwell_s": round(getattr(fr, "dwell", 0)),
+                        "file": f"frames/{fid}.webp", "w": fr.img.width, "h": fr.img.height,
+                        **({"reason": reason} if reason else {}),
+                    })
+                    if fr.sig is not None:
+                        last_sig = fr.sig
+                        main_kept.append((fr.t, fr.sig))
+                    fr.release()
+                if skipped_break:
+                    notes.append(f"第{part}段课间重复画面 {skipped_break} 张未保存")
+            finally:
+                bytes_in += rd.bytes
+                rd.close()
+
+            # A second projector input is only worth frames where it actually
+            # differs from the main screen (e.g. a question on one, answer on
+            # the other). Compare at the times the main screen kept.
+            aux_extra = 0
+            for aux_file in aux:
+                aux_rd = RangeReader(video_url(aux_file))
                 try:
-                    movie, track = open_track(rd)
-                    ks = KeyframeSource(rd, movie, track)
-                    picked = select_frames_logged(ks, params, self.log)
-                    kept = dedupe(picked, params.dedupe_thr)
-                    start = _parse_dt(f.get("startTime")) or _start_dt(r, det)
-                    for fr, also in kept:
+                    movie, track = open_track(aux_rd)
+                    ks = KeyframeSource(aux_rd, movie, track)
+                    if main_kept:
+                        times = [t for t, _ in main_kept]
+                        query = set(times)
+                        if main_start:  # also look when a break starts: aux may change while main does not
+                            query |= {
+                                round((a - main_start).total_seconds()) for a, _ in windows
+                                if 0 <= (a - main_start).total_seconds() < 3600
+                            }
+                        cand = [f for f in ks.get(sorted({ks.nearest(t) for t in query})) if f.sig is not None and not is_blank(f.sig)]
+                        pairs = []
+                        for f in cand:
+                            j = bisect.bisect_left(times, f.t)
+                            near = [i for i in (j - 1, j) if 0 <= i < len(times)]
+                            if not near:
+                                continue
+                            k = min(near, key=lambda i: abs(times[i] - f.t))
+                            if abs(times[k] - f.t) <= 2 and diff_fraction(main_kept[k][1], f.sig) > params.major_thr:
+                                pairs.append(f)
+                        kept = []
+                        for f in pairs:
+                            if not kept or all(diff_fraction(f.sig, g.sig) > params.dedupe_thr for g in kept):
+                                kept.append(f)
+                    else:
+                        # Main screen gave nothing (e.g. it stayed black): treat
+                        # the secondary as the source rather than lose the lecture.
+                        kept = [f for f, _ in dedupe(select_frames_logged(ks, params, self.log), params.dedupe_thr)]
+                    start = _parse_dt(aux_file.get("startTime")) or main_start
+                    for fr in kept:
                         n += 1
                         fid = f"F{n:03d}"
-                        path = fdir / f"{fid}.webp"
-                        save_webp(fr.img, path)
+                        save_webp(fr.img, fdir / f"{fid}.webp")
                         frames_out.append({
-                            "id": fid, "rec": r["id"], "part": part, "stream": stream, "t": round(fr.t, 2),
-                            "clock": _clock(start, fr.t), "first_seen": _clock(start, getattr(fr, "first_seen", fr.t)),
-                            "also_at": [_clock(start, a) for a in also], "dwell_s": round(getattr(fr, "dwell", 0)),
-                            "file": f"frames/{fid}.webp", "w": fr.img.width, "h": fr.img.height,
+                            "id": fid, "rec": r["id"], "part": part, "stream": "vga_aux", "screen": "aux",
+                            "t": round(fr.t, 2), "clock": _clock(start, fr.t), "first_seen": _clock(start, fr.t),
+                            "also_at": [], "dwell_s": round(getattr(fr, "dwell", 0)), "file": f"frames/{fid}.webp",
+                            "w": fr.img.width, "h": fr.img.height,
+                            "reason": "副屏与主屏不同" if main_kept else "主屏无画面，改用副屏",
                         })
+                        aux_extra += 1
                         fr.release()
-                    # Teacher camera for long static screens while teaching continues (board work).
-                    if stream == "vga" and teacher:
-                        extra = self._board_frames(lec, r, part, teacher[0], [fx for fx in frames_out if fx["rec"] == r["id"]], transcript, fdir, n, params)
-                        n += len(extra)
-                        frames_out += extra
-                        bytes_in += sum(e.pop("_bytes", 0) for e in extra)
                 finally:
-                    bytes_in += rd.bytes
-                    rd.close()
+                    bytes_in += aux_rd.bytes
+                    aux_rd.close()
+            if aux_extra:
+                notes.append(f"第{part}段副屏另有不同画面 {aux_extra} 张")
+
+            # Teacher camera for long static screens while teaching continues (board work).
+            if main_kept and teacher and source == "vga":
+                extra = self._board_frames(lec, r, part, teacher[0], [fx for fx in frames_out if fx["rec"] == r["id"] and fx["stream"] == "vga"], transcript, fdir, n, params)
+                n += len(extra)
+                frames_out += extra
+                bytes_in += sum(e.pop("_bytes", 0) for e in extra)
         try:
             run_ocr(frames_out, fdir)
         except OcrUnavailable as e:
@@ -451,6 +545,40 @@ def _load(p: Path, default):
         return default
 
 
+def screen_rank(f: dict) -> int:
+    """0 = main screen, 2 = secondary, 1 = unlabelled. The API names them 主屏/辅屏."""
+    name = str(f.get("recordDeviceName") or "")
+    if "主" in name:
+        return 0
+    if "辅" in name or "副" in name:
+        return 2
+    return 1
+
+
+def screen_files(files: list[dict]) -> tuple[dict | None, list[dict]]:
+    """(main screen, secondary screens), API order kept among equals."""
+    ranked = sorted(files, key=screen_rank)
+    return (ranked[0] if ranked else None), ranked[1:]
+
+
+def break_windows(lec) -> list[tuple[datetime, datetime]]:
+    """Inter-class gaps of this session, as wall-clock ranges."""
+    from . import schedule
+
+    try:
+        d = date.fromisoformat(str(lec["date"])[:10])
+        return [
+            (datetime.combine(d, dt_time.fromisoformat(a)), datetime.combine(d, dt_time.fromisoformat(b)))
+            for a, b in schedule.breaks(d, int(lec["start_period"]), int(lec["end_period"]))
+        ]
+    except (TypeError, ValueError):
+        return []
+
+
+def in_windows(dt: datetime | None, windows: list[tuple[datetime, datetime]]) -> bool:
+    return dt is not None and any(a <= dt < b for a, b in windows)
+
+
 def _parse_dt(s: str | None) -> datetime | None:
     if not s:
         return None
@@ -487,7 +615,10 @@ def audio_slots(det: dict, tol_s: float = 60.0) -> list[tuple[datetime | None, l
     """
     files = []
     for name, key in (("teacher", "teacherViewFiles"), ("student", "studentViewFiles"), ("vga", "vgaViewFiles")):
-        for f in det.get(key) or []:
+        group = det.get(key) or []
+        if name == "vga":
+            group = sorted(group, key=screen_rank)  # the main screen carries the room microphone
+        for f in group:
             files.append((_parse_dt(f.get("startTime")), name, f))
     files.sort(key=lambda x: (x[0] is None, x[0] or datetime.min))
     slots: list[tuple[datetime | None, list[tuple[str, dict]]]] = []

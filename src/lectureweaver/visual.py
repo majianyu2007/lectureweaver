@@ -13,10 +13,13 @@ Strategy per recording (all numbers configurable, defaults tuned on the
    drop blank frames and near-duplicates (a slide shown twice is kept once,
    with every time it appeared).
 
-The screen recording (VGA) is the main source. The teacher camera is only
-sampled where the screen stays unchanged for a long time while the
-transcript shows teaching continues (blackboard work); the student camera
-is never used.
+The main screen recording (VGA, device "主屏") is the source. A second
+projector input ("辅屏") is only sampled at the times the main screen kept,
+and only where it differs, so identical mirrors cost almost nothing. The
+teacher camera is only sampled where the screen stays unchanged for a long
+time while the transcript shows teaching continues (blackboard work); the
+student camera is never used. Frames in the inter-class break are dropped
+unless the screen actually changed.
 """
 
 from __future__ import annotations
@@ -123,6 +126,11 @@ def signature(img: Image.Image) -> Image.Image:
 def diff_fraction(a: Image.Image, b: Image.Image, thr: int = 28) -> float:
     h = ImageChops.difference(a, b).histogram()
     return sum(h[thr:]) / (SIG_W * SIG_H)
+
+
+def break_changed(sig: Image.Image | None, last_sig: Image.Image | None, thr: float) -> bool:
+    """During a break, only a screen that differs from the last kept one is worth saving."""
+    return sig is not None and (last_sig is None or diff_fraction(last_sig, sig) > thr)
 
 
 def is_blank(sig: Image.Image) -> bool:

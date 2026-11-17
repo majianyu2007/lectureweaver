@@ -34,6 +34,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from .kb import KB, loads
+from .pipeline import screen_rank
 from .platform.ylb import player_url
 
 T_RE = re.compile(r"\{t\s+(\d{1,2}:\d{2}(?::\d{2})?)\s*\}")
@@ -82,11 +83,11 @@ def _recs_with_windows(kb: KB, lecture_id: str) -> list[dict]:
     out = []
     for r in kb.q("SELECT * FROM recordings WHERE lecture_id=? ORDER BY start_time", lecture_id):
         det = loads(r["detail"], {}) or {}
-        files = det.get("vgaViewFiles") or det.get("teacherViewFiles") or []
+        files = sorted(det.get("vgaViewFiles") or [], key=screen_rank) or det.get("teacherViewFiles") or []
         starts = [f.get("startTime") for f in files if f.get("startTime")] or [r["start_time"]]
         ends = [f.get("endTime") for f in files if f.get("endTime")] or [r["end_time"]]
         try:
-            # the player plays from the first file; later files extend the window
+            # the player plays the main screen; later files extend the window
             s = datetime.fromisoformat(starts[0][:19])
             e = max(datetime.fromisoformat(x[:19]) for x in ends)
         except (TypeError, ValueError):
@@ -150,7 +151,7 @@ def render(kb: KB, note: dict, source: str, note_path: Path, root: Path) -> Rend
         dest_rel = f"attachments/{lec['id']}/{fid}.webp"
         attachments.append((src, dest_rel))
         rel_from_note = os.path.relpath(root / note_folder(kb, note) / dest_rel, note_path.parent)
-        stream = {"vga": "录屏", "teacher": "教师机位"}.get(f["stream"], f["stream"])
+        stream = {"vga": "录屏", "vga_aux": "录屏（副屏）", "teacher": "教师机位"}.get(f["stream"], f["stream"])
         return f"![{fid} · {stream} {f['clock']}]({_url(rel_from_note)})"
 
     def m_sub(m):

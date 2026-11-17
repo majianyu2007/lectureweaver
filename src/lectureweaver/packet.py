@@ -81,7 +81,9 @@ def build_packet(kb: KB, lec) -> tuple[Path, dict]:
     for i, r in enumerate(recs, 1):
         det = loads(r["detail"], {}) or {}
         src = next((s for s in tr.get("sources", []) if s.get("rec") == r["id"]), {})
-        kinds = [k for k, key in (("录屏", "vgaViewFiles"), ("教师机位", "teacherViewFiles"), ("学生机位", "studentViewFiles")) if det.get(key)]
+        n_vga = len(det.get("vgaViewFiles") or [])
+        kinds = ["录屏" + ("（主屏/副屏两路）" if n_vga > 1 else "")] if n_vga else []
+        kinds += [k for k, key in (("教师机位", "teacherViewFiles"), ("学生机位", "studentViewFiles")) if det.get(key)]
         nfr = sum(1 for x in frames if x["rec"] == r["id"])
         trans = {"platform": "云课堂自带转写", "asr": f"本地语音识别（{src.get('model', '')}）", "none": "无转写"}.get(src.get("kind", "none"), "无转写")
         if src.get("reason"):
@@ -237,7 +239,7 @@ def clean_ocr_lines(text: str) -> list[str]:
 
 
 def _stream_name(s: str) -> str:
-    return {"vga": "录屏", "teacher": "教师机位", "student": "学生机位"}.get(s, s)
+    return {"vga": "录屏（主屏）", "vga_aux": "录屏（副屏）", "teacher": "教师机位", "student": "学生机位"}.get(s, s)
 
 
 def _load(p: Path, default):

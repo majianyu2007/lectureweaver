@@ -22,6 +22,7 @@
   - `GET teachingApi/v1/videoinfo/student/courses?studentId&schoolYear&term&validCode(静态)` → 课程（`courseId`、`classIds`）。
   - `POST teachingApi/v1/videoinfos/page?validCode=` body `{userId, groupIds: classIds, openStatus:"1", week, schoolYear, term, page, pageSize}` → `videoInfoResourceList`、`total`。**每条录像是一节（45 分钟）**；同一次课的各节共享 `courseTableDetailId`。
   - `GET teachingApi/v1/recordvideo/{id}` → `teacherViewFiles`（教师机位）、`studentViewFiles`（学生机位）、`vgaViewFiles`（电脑录屏），每个文件 `outerIp + videoStorePath` 为 MP4 直链；还有 `taskId`、`startTime` 等。
+  - 部分教室（如 N9113、N9108）一次课返回两条 `vgaViewFiles`，同为 45 分钟、同起止时间，用 `recordDeviceName` 区分 `主屏` / `辅屏`（`recordDeviceId` 前缀 2-/3-）。返回顺序不保证主屏在前；辅屏可能全程纯黑，也可能显示与主屏不同的内容（题干/答案分屏）。
   - `GET lzaiApi/v1/spotbroadcastspeechrecognitions?taskId&identifySensitiveWord&validCode` → `[{speechRecognitionResults:[{startTimeStamp,endTimeStamp,recognitionResult}]}]`（相对该节录像开始的秒数）。抽查的一个学期里约八成录像有转写，最近几天的录像常常还没有。
   - `GET teachingApi/v1/classpptinfo/pptpagerecognitioninfos?recordVideoFileId` → 平台课件页识别（实测多为空）。
   - `GET teachingApi/v1/recordvideo/{id}/summarize|abstracts|mindmap` → 平台 AI 生成内容（只作定位参考）。
