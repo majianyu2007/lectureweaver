@@ -216,7 +216,7 @@ def test_visual_uses_main_screen_and_drops_repeated_break_frames(kb, tmp_path, m
     lec = kb.q1("SELECT * FROM lectures WHERE id=?", lid)
     p = pipeline.Pipeline(kb, visual_params=VisualParams(coarse_s=4.0))
     res = p.stage_visual(lec, tmp_path / "work")
-    frames = json.loads((kb.abs(lec["dir"]) / "frames.json").read_text())["frames"]
+    frames = json.loads((kb.abs(lec["dir"]) / "frames.json").read_text("utf-8"))["frames"]
 
     assert res.status == "done"
     assert all(f["stream"] in ("vga", "vga_aux") for f in frames)
